@@ -1,0 +1,16 @@
+[package]
+name = "gaussian_kde_ocl"
+version = "0.1.0"
+authors = ["davenza"]
+
+[lib]
+name="kde_rust"
+crate-type = ["cdylib"]
+
+
+[dependencies]
+libc = "*"
+ndarray = { version = "0.12" }
+num = "*"
+fnv = "1.0.3"
+ocl = "0.19"

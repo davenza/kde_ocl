@@ -94,6 +94,14 @@ use libc::{c_double, size_t};
 use ndarray::{Array2, ShapeBuilder};
 use ocl::{ProQue, Buffer, enums::{DeviceInfo, DeviceInfoResult}};
 
+#[macro_use]
+mod util_macros;
+mod shared_proqueue;
+
+pub use shared_proqueue::{new_proque, gaussian_kde_shared_init, gaussian_kde_shared_free,
+                          gaussian_proque_free, gaussian_kde_shared_pdf};
+
+
 /// This struct represents a double Numpy array
 #[repr(C)]
 pub struct DoubleNumpyArray {
@@ -197,127 +205,6 @@ fn lognorm_factor(n: usize, d: usize, chol_cov: &Array2<f64>) -> f64 {
     norm_factor + chol_cov.diag().fold(0., |accum: f64, v| accum + (*v as f64).ln())
 }
 
-/// This macro copies some slice-like data into OpenCL buffers. The buffers are returned in a tuple
-/// containing all the buffers. If some buffer returns with error while creating it, it returns
-/// setting a memory error. There are two variants of the macro, depending on the return value if
-/// the allocation fails:
-/// * The simpler variant just makes a `return;`
-/// * The more complex variant adds a `=> $ret` suffix to return with a `return $ret;`
-///
-/// # Examples
-///
-/// ```
-/// # #[macro_use] extern crate kde_rust;
-/// // Simple variant
-/// fn main() {
-///     let pro_que = ProQue::builder().src(r#"__kernel void dummy {}"#).build().unwrap();
-///     let mut error = Error::NoError;
-///     let error_ptr = &mut error as *mut Error;
-///     let vec = vec![0.0f64; 10];
-///     let vec2 = vec![1.0f64; 20];
-///     // It does a return; if the allocation fails:
-///     let (buffer,) = copy_buffers!(pro_que, error_ptr, vec);
-///     // Multiple buffering copies:
-///     let (buffer1, buffer2) = copy_buffers!(pro_que, error_ptr, vec, vec2);
-/// }
-/// ```
-/// ```
-/// # #[macro_use] extern crate kde_rust;
-///  // Complex variant.
-///  fn dummy() -> bool {
-///     let pro_que = ProQue::builder().src(r#"__kernel void dummy {}"#).build().unwrap();
-///     let mut error = Error::NoError;
-///     let error_ptr = &mut error as *mut Error;
-///     let vec = vec![0.0f64; 10];
-///     let vec2 = vec![1.0f64; 20];
-///     // It does a  return true; if the allocation fails:
-///     let (buffer,) = copy_buffers!(pro_que, error_ptr, vec => true);
-///     // Multiple buffering copies:
-///     let (buffer1, buffer2) = copy_buffers!(pro_que, error_ptr, vec, vec2 => true);
-///  }
-/// ```
-///
-///
-macro_rules! copy_buffers {
-    ($pro_que:expr, $error:expr, $($slice:expr),+) => {
-        {
-            (
-                $(
-                    match Buffer::builder()
-                        .context($pro_que.context())
-                        .len($slice.len())
-                        .copy_host_slice(&$slice)
-                        .build() {
-                            Ok(b) => b,
-                            Err(_) => {
-                                *$error = Error::MemoryError;
-                                return;
-                            }
-                        },
-                )+
-
-            )
-        }
-    };
-
-    ($pro_que:expr, $error:expr, $($slice:expr),+ => $ret:expr) => {
-        {
-            (
-                $(
-                    match Buffer::builder()
-                        .context($pro_que.context())
-                        .len($slice.len())
-                        .copy_host_slice(&$slice)
-                        .build() {
-                            Ok(b) => b,
-                            Err(_) => {
-                                *$error = Error::MemoryError;
-                                return $ret;
-                            }
-                        },
-                )+
-
-            )
-        }
-    };
-}
-
-/// This macro creates some new OpenCL buffer, given its type and their lengths. The buffers are
-/// returned in a tuple containing all the buffers. If some buffer returns with error while
-/// creating it, it returns setting a memory error.
-///
-/// # Examples
-///
-/// ```
-/// # #[macro_use] extern crate kde_rust;
-/// fn main() {
-///     let pro_que = ProQue::builder().src(r#"__kernel void dummy {}"#).build().unwrap();
-///     let mut error = Error::NoError;
-///     let error_ptr = &mut error as *mut Error;
-///     // It does a return; if the allocation fails.
-///     let (buffer,) = empty_buffers!(pro_que, error_ptr, f64, 10);
-///     // Multiple buffer allocations
-///     let (buffer, buffer2, buffer3) = empty_buffers!(pro_que, error_ptr, f64, 10, 35, 40);
-/// }
-/// ```
-macro_rules! empty_buffers {
-    ($pro_que:expr, $error:expr, $type:ty, $($len:expr),+) => {
-        {
-
-            (
-                $(
-                    match Buffer::<$type>::builder().context($pro_que.context()).len($len).build() {
-                        Ok(b) => b,
-                        Err(_) => {
-                            *$error = Error::MemoryError;
-                            return;
-                        }
-                    },
-                )+
-            )
-        }
-    };
-}
 
 /// Initializes a `KDEDensityOcl`. It expects two `DoubleNumpyArray` with the cholesky decomposition
 /// of the covariance matrix and the training data. The training data is expected to have shape
@@ -1257,16 +1144,16 @@ fn max_gpu_mat(pro_que: &ProQue, max_buffer: &Buffer<f64>, result_buffer: &Buffe
 
     n_cols = num_groups;
     local_size = if n_cols < max_work_size { n_cols } else { max_work_size };
-    let num_groups_orig = num_groups;
+    let matrix_actual_cols = num_groups;
     num_groups = (n_cols as f32 / local_size as f32).ceil() as usize;
 
     while n_cols > 1 {
         let kernel_max_gpu = pro_que.kernel_builder("max_gpu_mat")
-            .global_work_size((n_rows, num_groups))
+            .global_work_size((n_rows, n_cols))
             .local_work_size((1, local_size))
             .arg(result_buffer)
             .arg_local::<f64>(local_size)
-            .arg(num_groups_orig as u32)
+            .arg(matrix_actual_cols as u32)
             .build().expect("Kernel max_gpu_mat build failed.");
 
         unsafe { kernel_max_gpu.enq().expect("Error while executing max_gpu_mat kernel."); }

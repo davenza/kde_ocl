@@ -32,8 +32,6 @@ __kernel void substract(__constant double *train_data,
                         __private uint n_col) {
     int i = get_global_id(0);
     int c = i % n_col;
-    //printf("Row: %d. Column: %d. Value: %g. Index: %d", i / n_col, c, *res, i);
-
     res[i] = train_data[i] - vec[row*n_col + c];
 }
 
@@ -53,7 +51,6 @@ __kernel void square(__global double *solve_data) {
     uint idx = get_global_id(0);
     solve_data[idx] = solve_data[idx] * solve_data[idx];
 }
-
 
 /**
 ##########################################
@@ -321,33 +318,39 @@ __kernel void logsumout_to_matrix(__constant double *square_data,
 __kernel void max_gpu_mat_copy(__constant double *input,
                                __global double* maxGroups,
                                __local double *localMaxs,
-                               __private uint n_cols) {
+                               __private uint array_n_cols) {
 
     uint global_id_row = get_global_id(0);
     uint global_id_col = get_global_id(1);
+    uint n_cols = get_global_size(1);
     uint local_id = get_local_id(1);
     uint group_size = get_local_size(1);
     uint group_id = get_group_id(1);
-    uint num_groups = get_num_groups(1);
+//   FIXME: This code returns num_groups = 3 for global_size = 1000 and local_size = 256, so it does not work as expected
+//      when local_work_size does not evenly divide global_work_size.
+//    uint num_groups = get_num_groups(1);
+
+    //This is equal to ceil(n_cols/group_size): https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+    uint num_groups = (n_cols + group_size - 1) / group_size;
 
     if (group_id+1 == num_groups) {
         group_size = get_global_size(1) - group_id*group_size;
     }
 
-    localMaxs[local_id] = input[global_id_row*n_cols + global_id_col];
+    localMaxs[local_id] = input[global_id_row*array_n_cols + global_id_col];
 
     while (group_size > 1) {
         int stride = group_size / 2;
         barrier(CLK_LOCAL_MEM_FENCE);
         if (group_size % 2 == 0) {
             if (local_id < stride) {
-                localMaxs[local_id] = max(localMaxs[local_id], localMaxs[local_id + stride]);
+                localMaxs[local_id] = max(localMaxs[local_id], localMaxs[local_id+stride]);
             }
             group_size = group_size / 2;
         }
         else {
             if (local_id < stride) {
-                localMaxs[local_id+1] = max(localMaxs[local_id+1+stride], localMaxs[local_id+1]);
+                localMaxs[local_id+1] = max(localMaxs[local_id+1], localMaxs[local_id+1+stride]);
             }
             group_size = (group_size / 2) + 1;
         }
@@ -361,20 +364,26 @@ __kernel void max_gpu_mat_copy(__constant double *input,
 
 __kernel void max_gpu_mat(__global double* maxGroups,
                           __local double *localMaxs,
-                          __private uint n_cols) {
+                          __private uint array_n_cols) {
 
     uint global_id_row = get_global_id(0);
     uint global_id_col = get_global_id(1);
+    uint n_cols = get_global_size(1);
     uint local_id = get_local_id(1);
     uint group_size = get_local_size(1);
     uint group_id = get_group_id(1);
-    uint num_groups = get_num_groups(1);
+//   FIXME: This code returns num_groups = 3 for global_size = 1000 and local_size = 256, so it does not work as expected
+//      when local_work_size does not evenly divide global_work_size.
+//    uint num_groups = get_num_groups(1);
+
+    //This is equal to ceil(n_cols/group_size): https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+    uint num_groups = (n_cols + group_size - 1) / group_size;
 
     if (group_id+1 == num_groups) {
         group_size = get_global_size(1) - group_id*group_size;
     }
 
-    localMaxs[local_id] = maxGroups[global_id_row*n_cols + global_id_col];
+    localMaxs[local_id] = maxGroups[global_id_row*array_n_cols + global_id_col];
 
     while (group_size > 1) {
         int stride = group_size / 2;
@@ -396,7 +405,7 @@ __kernel void max_gpu_mat(__global double* maxGroups,
 
     barrier(CLK_GLOBAL_MEM_FENCE);
     if (local_id == 0) {
-        maxGroups[global_id_row*n_cols + group_id] = localMaxs[0];
+        maxGroups[global_id_row*array_n_cols + group_id] = localMaxs[0];
     }
 }
 
@@ -410,20 +419,26 @@ __kernel void exp_and_sum_mat(__global double* res, __constant double* maxexp, _
 
 __kernel void sum_gpu_mat(__global double* maxGroups,
                           __local double *localMaxs,
-                          __private uint n_cols) {
+                          __private uint array_n_cols) {
 
     uint global_id_row = get_global_id(0);
     uint global_id_col = get_global_id(1);
+    uint n_cols = get_global_size(1);
     uint local_id = get_local_id(1);
     uint group_size = get_local_size(1);
     uint group_id = get_group_id(1);
-    uint num_groups = get_num_groups(1);
+//   FIXME: This code returns num_groups = 3 for global_size = 1000 and local_size = 256, so it does not work as expected
+//      when local_work_size does not evenly divide global_work_size.
+//    uint num_groups = get_num_groups(1);
+
+    //This is equal to ceil(n_cols/group_size): https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+    uint num_groups = (n_cols + group_size - 1) / group_size;
 
     if (group_id+1 == num_groups) {
         group_size = get_global_size(1) - group_id*group_size;
     }
 
-    localMaxs[local_id] = maxGroups[global_id_row*n_cols + global_id_col];
+    localMaxs[local_id] = maxGroups[global_id_row*array_n_cols + global_id_col];
 
     while (group_size > 1) {
         int stride = group_size / 2;
@@ -445,7 +460,7 @@ __kernel void sum_gpu_mat(__global double* maxGroups,
 
     barrier(CLK_GLOBAL_MEM_FENCE);
     if (local_id == 0) {
-        maxGroups[global_id_row*n_cols + group_id] = localMaxs[0];
+        maxGroups[global_id_row*array_n_cols + group_id] = localMaxs[0];
     }
 }
 

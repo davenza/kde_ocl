@@ -6,7 +6,6 @@ use std::slice;
 use std::ptr;
 use std::f64;
 
-
 use {DoubleNumpyArray, Error, load_numpy_2d, lognorm_factor, get_max_work_size, sum_gpu_vec,
      buffer_fill_value, max_gpu_vec_copy, log_sum_gpu_vec, max_gpu_mat, sum_gpu_mat};
 
@@ -315,7 +314,7 @@ unsafe fn logpdf_iterate_shared_test(kde: &mut Box<SharedGaussianKDE>,
         log_sum_gpu_vec(&pro_que, &tmp_vec_buffer, &max_buffer,
                         n, max_work_size, local_work_size, num_groups);
 
-        let mut kernel_log_sum_gpu = pro_que.kernel_builder("copy_logpdf_result")
+        let kernel_log_sum_gpu = pro_que.kernel_builder("copy_logpdf_result")
             .global_work_size(1)
             .arg(&tmp_vec_buffer)
             .arg(&max_buffer)

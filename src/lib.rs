@@ -754,7 +754,7 @@ unsafe fn logpdf_iterate_test(kde: &mut Box<GaussianKDE>,
         log_sum_gpu_vec(&kde.pro_que, &tmp_vec_buffer, &max_buffer,
                         n, max_work_size, local_work_size, num_groups);
 
-        let mut kernel_log_sum_gpu = kde.pro_que.kernel_builder("copy_logpdf_result")
+        let kernel_log_sum_gpu = kde.pro_que.kernel_builder("copy_logpdf_result")
             .global_work_size(1)
             .arg(&tmp_vec_buffer)
             .arg(&max_buffer)

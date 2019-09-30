@@ -1,6 +1,7 @@
 from cffi import FFI
 import numpy as np
 from scipy._lib.six import string_types
+import atexit
 
 class CFFIDoubleArray(object):
     def __init__(self, array, ffi):
@@ -70,6 +71,9 @@ class gaussian_kde_ocl(object):
                          "Dataset dimensions:" + self.dataset.ndim)
         if self.dataset.dtype != np.float64:
             self.dataset = self.dataset.astype(np.float64)
+
+        if self.dataset.shape[0] == 1:
+            self.dataset = self.dataset.T
 
         self.n, self.d = self.dataset.shape
         self.set_bandwidth(bw_method=bw_method)
@@ -157,10 +161,10 @@ class gaussian_kde_ocl(object):
         points = np.atleast_2d(x)
         m, d = points.shape
         if d != self.d:
-            if d == 1 and m == self.d:
+            if m == 1 == self.d:
                 # points was passed in as a row vector
-                points = np.reshape(points, (self.d, 1))
-                m = 1
+                points = points.T
+                m = d
             else:
                 msg = "points have dimension %s, dataset has dimension %s" % (d, self.d)
                 raise ValueError(msg)
@@ -186,10 +190,10 @@ class gaussian_kde_ocl(object):
         points = np.atleast_2d(x)
         m, d = points.shape
         if d != self.d:
-            if d == 1 and m == self.d:
+            if m == 1 == self.d:
                 # points was passed in as a row vector
-                points = np.reshape(points, (self.d, 1))
-                m = 1
+                points = points.T
+                m = d
             else:
                 msg = "points have dimension %s, dataset has dimension %s" % (d, self.d)
                 raise ValueError(msg)
@@ -202,7 +206,6 @@ class gaussian_kde_ocl(object):
         if error[0] == Error.MemoryError:
                 raise MemoryError("Memory error allocating space in the OpenCL device.")
         return result
-
 
 
 class shared_gaussian_kde_ocl(object):
@@ -264,6 +267,9 @@ class shared_gaussian_kde_ocl(object):
         if self.dataset.dtype != np.float64:
             self.dataset = self.dataset.astype(np.float64)
 
+        if self.dataset.shape[0] == 1:
+            self.dataset = self.dataset.T
+
         self.n, self.d = self.dataset.shape
         self.set_bandwidth(bw_method=bw_method)
         self.__initCFFI(pro_que)
@@ -298,7 +304,6 @@ class shared_gaussian_kde_ocl(object):
 
         self._compute_covariance()
 
-
     #  Default method to calculate bandwidth, can be overwritten by subclass
     covariance_factor = scotts_factor
 
@@ -327,11 +332,9 @@ class shared_gaussian_kde_ocl(object):
         if pro_que is None:
             if shared_gaussian_kde_ocl.default_pro_que is None:
                 shared_gaussian_kde_ocl.default_pro_que = self.__lib.new_proque()
-                shared_gaussian_kde_ocl.default_pro_que = \
-                    self.__ffi.gc(shared_gaussian_kde_ocl.default_pro_que, self.__lib.gaussian_proque_free)
+                atexit.register(self.__lib.gaussian_proque_free, shared_gaussian_kde_ocl.default_pro_que)
 
             self.pro_que = shared_gaussian_kde_ocl.default_pro_que
-
         else:
             self.pro_que = pro_que
 
@@ -361,10 +364,10 @@ class shared_gaussian_kde_ocl(object):
         points = np.atleast_2d(x)
         m, d = points.shape
         if d != self.d:
-            if d == 1 and m == self.d:
+            if m == 1 == self.d:
                 # points was passed in as a row vector
-                points = np.reshape(points, (self.d, 1))
-                m = 1
+                points = points.T
+                m = d
             else:
                 msg = "points have dimension %s, dataset has dimension %s" % (d, self.d)
                 raise ValueError(msg)
@@ -390,10 +393,10 @@ class shared_gaussian_kde_ocl(object):
         points = np.atleast_2d(x)
         m, d = points.shape
         if d != self.d:
-            if d == 1 and m == self.d:
+            if m == 1 == self.d:
                 # points was passed in as a row vector
-                points = np.reshape(points, (self.d, 1))
-                m = 1
+                points = points.T
+                m = d
             else:
                 msg = "points have dimension %s, dataset has dimension %s" % (d, self.d)
                 raise ValueError(msg)

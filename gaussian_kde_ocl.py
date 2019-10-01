@@ -1,6 +1,6 @@
 from cffi import FFI
 import numpy as np
-from scipy._lib.six import string_types
+from six import string_types
 import atexit
 
 class CFFIDoubleArray(object):

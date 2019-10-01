@@ -1,10 +1,9 @@
 [package]
-name = "gaussian_kde_ocl"
+name = "kde-ocl-sys"
 version = "0.1.0"
 authors = ["davenza"]
 
 [lib]
-name="kde_rust"
 crate-type = ["cdylib"]
 
 
@@ -14,3 +13,6 @@ ndarray = { version = "0.12" }
 num = "*"
 fnv = "1.0.3"
 ocl = "0.19"
+
+[build-dependencies]
+cbindgen = "0.9.1"

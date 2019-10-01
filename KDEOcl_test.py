@@ -1,5 +1,5 @@
 from __future__ import print_function
-import gaussian_kde_ocl
+from kde_ocl import gaussian_kde_ocl
 import numpy as np
 import time
 import scipy.stats as spstats
@@ -22,27 +22,34 @@ test = np.random.multivariate_normal([0,0], [[3,2],[2,3]], n_test)
 
 pdf_scipy = spstats.gaussian_kde(train.T)
 
-kde_normal = gaussian_kde_ocl.gaussian_kde_ocl(train)
+kde_normal = gaussian_kde_ocl(train)
 start = time.time()
 pdf_ocl = kde_normal(test)
 end = time.time()
-print("OpenCL shared time:", (end-start))
+time_pdf_ocl = end-start
+print("OpenCL shared time:", time_pdf_ocl)
 
 start = time.time()
 logpdf_ocl = kde_normal.logpdf(test)
 end = time.time()
-print("OpenCL shared logtime:", (end-start))
+time_logpdf_ocl = end-start
+print("OpenCL shared logtime:", time_logpdf_ocl)
 
 start = time.time()
 pdf_truth = pdf_scipy.pdf(test.T)
 end = time.time()
-print("Python/Scipy time:", (end-start))
+time_pdf_scipy = end-start
+print("Python/Scipy time:", time_pdf_scipy)
 
 start = time.time()
 logpdf_truth = pdf_scipy.logpdf(test.T)
 end = time.time()
-print("Python/Scipy log time:", (end-start))
+time_logpdf_scipy = end-start
+print("Python/Scipy log time:", time_logpdf_scipy)
 print()
+
+print("Speed up pdf:", time_pdf_scipy / time_pdf_ocl)
+print("Speed up logpdf:", time_logpdf_scipy / time_logpdf_ocl)
 
 print("Comparing OpenCL with Python/Scipy results...")
 print("pdf:")
@@ -61,28 +68,35 @@ test = np.random.multivariate_normal([0,0], [[3,2],[2,3]], n_test)
 
 pdf_scipy = spstats.gaussian_kde(train.T)
 
-kde_normal = gaussian_kde_ocl.gaussian_kde_ocl(train)
+kde_normal = gaussian_kde_ocl(train)
 start = time.time()
 pdf_ocl = kde_normal(test)
 end = time.time()
-print("OpenCL shared time:", (end-start))
+time_pdf_ocl = end-start
+print("OpenCL shared time:", time_pdf_ocl)
 
 start = time.time()
 logpdf_ocl = kde_normal.logpdf(test)
 end = time.time()
-print("OpenCL shared logtime:", (end-start))
+time_logpdf_ocl = end-start
+print("OpenCL shared logtime:", time_logpdf_ocl)
 
 start = time.time()
 # Don't test with every point or the Python code will throw OutOfMemory.
 pdf_truth = pdf_scipy.pdf(test[:100].T)
 end = time.time()
-print("Python/Scipy time:", (end-start))
+time_pdf_scipy = end-start
+print("Python/Scipy time:", time_pdf_scipy)
 
 start = time.time()
 logpdf_truth = pdf_scipy.logpdf(test[:100].T)
 end = time.time()
-print("Python/Scipy log time:", (end-start))
+time_logpdf_scipy = end-start
+print("Python/Scipy log time:", time_logpdf_scipy)
 print()
+
+print("Speed up pdf:", time_pdf_scipy / time_pdf_ocl)
+print("Speed up logpdf:", time_logpdf_scipy / time_logpdf_ocl)
 
 print("Comparing OpenCL with Python/Scipy results...")
 print("pdf:")
@@ -101,28 +115,35 @@ test = np.random.multivariate_normal([0,0], [[3,2],[2,3]], n_test)
 
 pdf_scipy = spstats.gaussian_kde(train.T)
 
-kde_normal = gaussian_kde_ocl.gaussian_kde_ocl(train)
+kde_normal = gaussian_kde_ocl(train)
 start = time.time()
 pdf_ocl = kde_normal(test)
 end = time.time()
-print("OpenCL shared time:", (end-start))
+time_pdf_ocl = end-start
+print("OpenCL shared time:", time_pdf_ocl)
 
 start = time.time()
 logpdf_ocl = kde_normal.logpdf(test)
 end = time.time()
-print("OpenCL shared logtime:", (end-start))
+time_logpdf_ocl = end-start
+print("OpenCL shared logtime:", time_logpdf_ocl)
 
 start = time.time()
 pdf_truth = pdf_scipy.pdf(test.T)
 end = time.time()
-print("Python/Scipy time:", (end-start))
+time_pdf_scipy = end-start
+print("Python/Scipy time:", time_pdf_scipy)
 
 start = time.time()
 logpdf_truth = pdf_scipy.logpdf(test.T)
 end = time.time()
-print("Python/Scipy log time:", (end-start))
-
+time_logpdf_scipy = end-start
+print("Python/Scipy log time:", time_logpdf_scipy)
 print()
+
+print("Speed up pdf:", time_pdf_scipy / time_pdf_ocl)
+print("Speed up logpdf:", time_logpdf_scipy / time_logpdf_ocl)
+
 print("Comparing OpenCL with Python/Scipy results...")
 print("pdf:")
 compareResults(pdf_truth, pdf_ocl)

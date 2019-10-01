@@ -91,11 +91,11 @@ use ocl::{
     Buffer, ProQue,
 };
 use std::f64;
-use std::fs::File;
-use std::io::Read;
 use std::mem;
 use std::ptr;
 use std::slice;
+
+mod open_cl_code;
 
 #[macro_use]
 mod util_macros;
@@ -147,7 +147,6 @@ pub enum Error {
 }
 
 /// Implements a KDE density model in OpenCL.
-#[repr(C)]
 #[derive(Debug)]
 pub struct GaussianKDE {
     /// Number of train instances.
@@ -206,13 +205,10 @@ fn lognorm_factor(n: usize, d: usize, chol_cov: &Array2<f64>) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn new_proque() -> *mut ProQue {
     // TODO: The OpenCL code should be included in the code to make easier distribute the library.
-    let mut f = File::open("src/kde_gaussian.cl").expect("OpenCL code file not found");
-    let mut src = String::new();
-    f.read_to_string(&mut src)
-        .expect("Error while reading OpenCL code file.");
+
 
     let pro_que = ProQue::builder()
-        .src(src)
+        .src(open_cl_code::OPEN_CL_CODE)
         .build()
         .expect("Error while creating OpenCL ProQue.");
 

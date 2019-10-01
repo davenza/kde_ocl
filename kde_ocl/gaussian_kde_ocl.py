@@ -1,14 +1,15 @@
-from cffi import FFI
 import numpy as np
 from six import string_types
 import atexit
+
+from ._ffi import ffi, lib
 
 class CFFIDoubleArray(object):
     def __init__(self, array, ffi):
         self.shape = ffi.new("size_t[]", array.shape)
         self.strides = ffi.new("size_t[]", array.strides)
         self.arrayptr = ffi.cast("double*", array.ctypes.data)
-        self.cffiarray = ffi.new('struct DoubleNumpyArray*', {'ptr': self.arrayptr,
+        self.cffiarray = ffi.new('DoubleNumpyArray*', {'ptr': self.arrayptr,
                                                               'size': array.size,
                                                               'ndim': array.ndim,
                                                               'shape': self.shape,
@@ -32,43 +33,6 @@ class gaussian_kde_ocl(object):
         :param dataset: Train data with n instances of d dimensions and shape (n,d).
         :param bw_method: Bandwidth computation method.
         """
-        self._ffi = FFI()
-        self._lib = self._ffi.dlopen("./target/release/libkde_rust.so")
-        self._ffi.cdef(
-            'struct FloatNumpyArray {'
-            'float* ptr;'
-            'size_t size;'
-            'size_t ndim;'
-            'size_t* shape;'
-            'size_t* strides;'
-            '};'
-            'struct DoubleNumpyArray {'
-            'double* ptr;'
-            'size_t size;'
-            'size_t ndim;'
-            'size_t* shape;'
-            'size_t* strides;'
-            '};'
-            'enum Error {'
-            '   NoError = 0,'
-            '   MemoryError,'
-            '   NullPointer,'
-            '   WrongDimensions,'
-            '   NonPositiveSemiDefinite'
-            '};'
-            'typedef void* GaussianKDE;'
-            'typedef void* ProQue;'
-            'ProQue new_proque();'
-            'GaussianKDE gaussian_kde_init(ProQue pro_que, struct DoubleNumpyArray* cov, '
-            '                                           struct DoubleNumpyArray* training_data, enum Error *error);'
-            'void gaussian_kde_free(GaussianKDE kde);'
-            'void gaussian_proque_free(ProQue pro_que);'
-            'void gaussian_kde_pdf(GaussianKDE kde, ProQue pro_que, const struct DoubleNumpyArray *x, '
-            '                               double* result, enum Error *error);'
-            'void gaussian_kde_logpdf(GaussianKDE kde, ProQue pro_que, const struct DoubleNumpyArray *x, '
-            '                                double* result, enum Error *error);')
-
-
         self.dataset = np.atleast_2d(dataset)
         if not self.dataset.size > 1:
             raise ValueError("`dataset` input should have multiple elements.")
@@ -142,20 +106,20 @@ class gaussian_kde_ocl(object):
         """
         if pro_que is None:
             if gaussian_kde_ocl.default_pro_que is None:
-                gaussian_kde_ocl.default_pro_que = self._lib.new_proque()
-                atexit.register(self._lib.gaussian_proque_free, gaussian_kde_ocl.default_pro_que)
+                gaussian_kde_ocl.default_pro_que = lib.new_proque()
+                atexit.register(lib.gaussian_proque_free, gaussian_kde_ocl.default_pro_que)
 
             self.pro_que = gaussian_kde_ocl.default_pro_que
         else:
             self.pro_que = pro_que
 
-        chol = CFFIDoubleArray(self.cholesky, self._ffi)
-        dataset = CFFIDoubleArray(self.dataset, self._ffi)
-        error = self._ffi.new("enum Error*", 0)
-        self.kdedensity = self._lib.gaussian_kde_init(self.pro_que, chol.c_ptr(), dataset.c_ptr(), error)
+        chol = CFFIDoubleArray(self.cholesky, ffi)
+        dataset = CFFIDoubleArray(self.dataset, ffi)
+        error = ffi.new("Error*", 0)
+        self.kdedensity = lib.gaussian_kde_init(self.pro_que, chol.c_ptr(), dataset.c_ptr(), error)
         if error[0] == Error.MemoryError:
             raise MemoryError("Memory error allocating space in the OpenCL device.")
-        self.kdedensity = self._ffi.gc(self.kdedensity, self._lib.gaussian_kde_free)
+        self.kdedensity = ffi.gc(self.kdedensity, lib.gaussian_kde_free)
 
     def evaluate(self, points):
         """
@@ -184,12 +148,12 @@ class gaussian_kde_ocl(object):
                 raise ValueError(msg)
 
         result = np.empty((m,), dtype=np.float64)
-        cffi_points = CFFIDoubleArray(points, self._ffi)
-        cffi_result = self._ffi.cast("double *", result.ctypes.data)
-        error = self._ffi.new("enum Error*", 0)
+        cffi_points = CFFIDoubleArray(points, ffi)
+        cffi_result = ffi.cast("double *", result.ctypes.data)
+        error = ffi.new("Error*", 0)
         if error[0] == Error.MemoryError:
             raise MemoryError("Memory error allocating space in the OpenCL device.")
-        self._lib.gaussian_kde_pdf(self.kdedensity, self.pro_que, cffi_points.c_ptr(), cffi_result, error)
+        lib.gaussian_kde_pdf(self.kdedensity, self.pro_que, cffi_points.c_ptr(), cffi_result, error)
         return result
 
     __call__ = pdf
@@ -213,13 +177,13 @@ class gaussian_kde_ocl(object):
                 raise ValueError(msg)
 
         result = np.empty((m,), dtype=np.float64)
-        cffi_points = CFFIDoubleArray(points, self._ffi)
-        cffi_result = self._ffi.cast("double *", result.ctypes.data)
-        error = self._ffi.new("enum Error*", 0)
-        self._lib.gaussian_kde_logpdf(self.kdedensity, self.pro_que, cffi_points.c_ptr(), cffi_result, error)
+        cffi_points = CFFIDoubleArray(points, ffi)
+        cffi_result = ffi.cast("double *", result.ctypes.data)
+        error = ffi.new("Error*", 0)
+        lib.gaussian_kde_logpdf(self.kdedensity, self.pro_que, cffi_points.c_ptr(), cffi_result, error)
         if error[0] == Error.MemoryError:
             raise MemoryError("Memory error allocating space in the OpenCL device.")
         return result
 
     def new_proque(self):
-        return self._lib.new_proque()
+        return lib.new_proque()

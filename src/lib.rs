@@ -84,23 +84,21 @@ extern crate num;
 
 extern crate ocl;
 
-use std::f64;
-use std::slice;
-use std::mem;
-use std::ptr;
-use std::fs::File;
-use std::io::Read;
 use libc::{c_double, size_t};
 use ndarray::{Array2, ShapeBuilder};
-use ocl::{ProQue, Buffer, enums::{DeviceInfo, DeviceInfoResult}};
+use ocl::{
+    enums::{DeviceInfo, DeviceInfoResult},
+    Buffer, ProQue,
+};
+use std::f64;
+use std::fs::File;
+use std::io::Read;
+use std::mem;
+use std::ptr;
+use std::slice;
 
 #[macro_use]
 mod util_macros;
-mod shared_proqueue;
-
-pub use shared_proqueue::{new_proque, gaussian_kde_shared_init, gaussian_kde_shared_free,
-                          gaussian_proque_free, gaussian_kde_shared_pdf};
-
 
 /// This struct represents a double Numpy array
 #[repr(C)]
@@ -109,23 +107,16 @@ pub struct DoubleNumpyArray {
     size: size_t,
     ndim: size_t,
     shape: *mut size_t,
-    strides: *mut size_t
+    strides: *mut size_t,
 }
 
 /// Loads the meta-data of a Numpy array: its data pointer, and its shape and strides.
-fn load_numpy_metadata<'a>(array: *const DoubleNumpyArray) -> (Vec<f64>, &'a [usize], &'a [usize])
-{
-    let array_vec = unsafe {
-        slice::from_raw_parts((*array).ptr, (*array).size).to_vec()
-    };
+fn load_numpy_metadata<'a>(array: *const DoubleNumpyArray) -> (Vec<f64>, &'a [usize], &'a [usize]) {
+    let array_vec = unsafe { slice::from_raw_parts((*array).ptr, (*array).size).to_vec() };
 
-    let shape = unsafe {
-        slice::from_raw_parts((*array).shape, (*array).ndim)
-    };
+    let shape = unsafe { slice::from_raw_parts((*array).shape, (*array).ndim) };
 
-    let strides = unsafe {
-        slice::from_raw_parts((*array).strides, (*array).ndim)
-    };
+    let strides = unsafe { slice::from_raw_parts((*array).strides, (*array).ndim) };
 
     (array_vec, shape, strides)
 }
@@ -140,10 +131,10 @@ fn load_numpy_2d(array: *const DoubleNumpyArray) -> Array2<f64> {
     let mut arr_strides = [0; 2];
     arr_strides.copy_from_slice(strides);
     // We need to convert the strides from bytes to the number of elements.
-    arr_strides.iter_mut().for_each(|s| *s = *s / mem::size_of::<f64>());
-    unsafe {
-        Array2::from_shape_vec_unchecked(arr_shape.strides(arr_strides), array_vec)
-    }
+    arr_strides
+        .iter_mut()
+        .for_each(|s| *s = *s / mem::size_of::<f64>());
+    unsafe { Array2::from_shape_vec_unchecked(arr_shape.strides(arr_strides), array_vec) }
 }
 
 /// This enum represents the posible errors that can arise during the execution of the KDE.
@@ -152,7 +143,7 @@ fn load_numpy_2d(array: *const DoubleNumpyArray) -> Array2<f64> {
 #[derive(PartialEq)]
 pub enum Error {
     NoError = 0,
-    MemoryError
+    MemoryError,
 }
 
 /// Implements a KDE density model in OpenCL.
@@ -163,8 +154,6 @@ pub struct GaussianKDE {
     n: usize,
     /// Dimensionality of the training data.
     d: usize,
-    /// ProQue to access to OpenCL.
-    pro_que: ProQue,
     /// Buffer containing the training data.
     training_data: Buffer<f64>,
     /// Buffer containing the Cholesky decomposition of the covariance matrix of the KDE.
@@ -180,31 +169,56 @@ pub struct GaussianKDE {
 /// Gets the maximum work group size of the default device. This is the preferred local work size
 /// for many operations (especially reductions, such as sums or finding maximums).
 fn get_max_work_size(pro_que: &ProQue) -> usize {
-    match pro_que.device()
+    match pro_que
+        .device()
         .info(DeviceInfo::MaxWorkGroupSize)
-        .expect("The maximum local work size could not be detected.") {
+        .expect("The maximum local work size could not be detected.")
+    {
         DeviceInfoResult::MaxWorkGroupSize(s) => s,
-        _ => unreachable!()
+        _ => unreachable!(),
     }
 }
 
 /// Fills a given OpenCL buffer with a value.
 fn buffer_fill_value(pro_que: &ProQue, b: &Buffer<f64>, size: usize, value: f64) {
-    let kernel_zeros = pro_que.kernel_builder("fill_value")
+    let kernel_zeros = pro_que
+        .kernel_builder("fill_value")
         .global_work_size(size)
         .arg(b)
         .arg(value)
-        .build().expect("Final result initialization failed.");
-    unsafe { kernel_zeros.enq().expect("Error while filling the buffer."); }
+        .build()
+        .expect("Final result initialization failed.");
+    unsafe {
+        kernel_zeros.enq().expect("Error while filling the buffer.");
+    }
 }
 
 /// Computes the lognorm factor: See [KDEDensityOcl](struct.KDEDensityOcl.html)
 fn lognorm_factor(n: usize, d: usize, chol_cov: &Array2<f64>) -> f64 {
     let norm_factor = 0.5 * (d as f64) * (2.0 * f64::consts::PI).ln() + (n as f64).ln();
     // Summing the sqrt of the covariance determinant using the cholesky matrix.
-    norm_factor + chol_cov.diag().fold(0., |accum: f64, v| accum + (*v as f64).ln())
+    norm_factor
+        + chol_cov
+            .diag()
+            .fold(0., |accum: f64, v| accum + (*v as f64).ln())
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn new_proque() -> *mut ProQue {
+    // TODO: The OpenCL code should be included in the code to make easier distribute the library.
+    let mut f = File::open("src/kde_gaussian.cl").expect("OpenCL code file not found");
+    let mut src = String::new();
+    f.read_to_string(&mut src)
+        .expect("Error while reading OpenCL code file.");
+
+    let pro_que = ProQue::builder()
+        .src(src)
+        .build()
+        .expect("Error while creating OpenCL ProQue.");
+
+    let proque_box = Box::new(pro_que);
+    Box::into_raw(proque_box)
+}
 
 /// Initializes a `KDEDensityOcl`. It expects two `DoubleNumpyArray` with the cholesky decomposition
 /// of the covariance matrix and the training data. The training data is expected to have shape
@@ -216,25 +230,19 @@ fn lognorm_factor(n: usize, d: usize, chol_cov: &Array2<f64>) -> f64 {
 /// This function is unsafe because it receives some Numpy array pointers wrapped in the
 /// `DoubleNumpyArray` struct. Those matrices should not point to invalid data.
 #[no_mangle]
-pub unsafe extern "C" fn gaussian_kde_init(chol: *const DoubleNumpyArray,
-                                           training_data: *const DoubleNumpyArray,
-                                           error: *mut Error) -> *mut GaussianKDE {
+pub unsafe extern "C" fn gaussian_kde_init(
+    pro_que: *mut ProQue,
+    chol: *const DoubleNumpyArray,
+    training_data: *const DoubleNumpyArray,
+    error: *mut Error,
+) -> *mut GaussianKDE {
     let n = *(*training_data).shape;
     let d = *(*chol).shape;
     let chol_cov = load_numpy_2d(chol);
     let lognorm_factor = lognorm_factor(n, d, &chol_cov);
     let chol_vec = chol_cov.into_raw_vec();
 
-    // TODO: The OpenCL code should be included in the code to make easier distribute the library.
-    let mut f = File::open("src/kde_gaussian.cl")
-        .expect("OpenCL code file not found");
-    let mut src = String::new();
-    f.read_to_string(&mut src).expect("Error while reading OpenCL code file.");
-
-    let pro_que = ProQue::builder()
-        .src(src)
-        .dims(n*d)
-        .build().expect("Error while creating OpenCL ProQue.");
+    let pro_que = Box::from_raw(pro_que);
 
     let training_slice = slice::from_raw_parts((*training_data).ptr, (*training_data).size);
 
@@ -244,13 +252,15 @@ pub unsafe extern "C" fn gaussian_kde_init(chol: *const DoubleNumpyArray,
     let kde = Box::new(GaussianKDE {
         n,
         d,
-        pro_que,
         training_data: training_buffer,
         chol_cov: chol_buffer,
-        lognorm_factor
+        lognorm_factor,
     });
 
     let ptr_kde = Box::into_raw(kde);
+
+    Box::into_raw(pro_que);
+
     *error = Error::NoError;
     ptr_kde
 }
@@ -263,6 +273,17 @@ pub extern "C" fn gaussian_kde_free(kde: *mut GaussianKDE) {
     }
     unsafe {
         Box::from_raw(kde);
+    }
+}
+
+/// Frees the `ProQue`.
+#[no_mangle]
+pub extern "C" fn gaussian_proque_free(pro_que: *mut ProQue) {
+    if pro_que.is_null() {
+        return;
+    }
+    unsafe {
+        Box::from_raw(pro_que);
     }
 }
 
@@ -419,109 +440,155 @@ pub extern "C" fn gaussian_kde_free(kde: *mut GaussianKDE) {
 ///         v_{n} + w_{n}\end{bmatrix}
 /// ```
 #[no_mangle]
-pub unsafe extern "C" fn gaussian_kde_pdf(kde: *mut GaussianKDE,
-                                          testing_data: *const DoubleNumpyArray,
-                                          result: *mut c_double,
-                                          error: *mut Error) {
-    let mut kde_box = Box::from_raw(kde);
+pub unsafe extern "C" fn gaussian_kde_pdf(
+    kde: *mut GaussianKDE,
+    pro_que: *mut ProQue,
+    testing_data: *const DoubleNumpyArray,
+    result: *mut c_double,
+    error: *mut Error,
+) {
+    let kde_box = Box::from_raw(kde);
+    let mut pro_que = Box::from_raw(pro_que);
 
     let m = *(*testing_data).shape;
     let final_result = slice::from_raw_parts_mut(result, m);
 
-    let max_work_size = get_max_work_size(&kde_box.pro_que);
+    let max_work_size = get_max_work_size(&pro_que);
 
     let d = kde_box.d;
-//    Iterates over training or testing data?
+    //    Iterates over training or testing data?
     let len_iteration = if kde_box.n >= m { kde_box.n } else { m };
 
-    kde_box.pro_que.set_dims(len_iteration*d);
+    pro_que.set_dims(len_iteration * d);
 
-    let local_size = if len_iteration < max_work_size { len_iteration } else { max_work_size };
+    let local_size = if len_iteration < max_work_size {
+        len_iteration
+    } else {
+        max_work_size
+    };
     let num_groups = (len_iteration as f32 / local_size as f32).ceil() as usize;
 
-    let test_slice = slice::from_raw_parts((*testing_data).ptr, m*d);
+    let test_slice = slice::from_raw_parts((*testing_data).ptr, m * d);
 
-    let (test_instances_buffer,) =
-        copy_buffers!(kde_box.pro_que, error, test_slice);
+    let (test_instances_buffer,) = copy_buffers!(pro_que, error, test_slice);
 
     let (final_result_buffer, tmp_matrix_buffer, tmp_vec_buffer) =
-        empty_buffers!(kde_box.pro_que, error, f64, m, len_iteration*d, len_iteration);
+        empty_buffers!(pro_que, error, f64, m, len_iteration * d, len_iteration);
 
     let kernel_substract = {
-        let (matrix_buf, vec_buf) =
-            if kde_box.n >= m {
-                (&kde_box.training_data, &test_instances_buffer)
-            } else {
-                (&test_instances_buffer, &kde_box.training_data)
-            };
+        let (matrix_buf, vec_buf) = if kde_box.n >= m {
+            (&kde_box.training_data, &test_instances_buffer)
+        } else {
+            (&test_instances_buffer, &kde_box.training_data)
+        };
 
-        kde_box.pro_que.kernel_builder("substract")
+        pro_que
+            .kernel_builder("substract")
             .arg(matrix_buf)
             .arg(vec_buf)
             .arg(&tmp_matrix_buffer)
             .arg_named("row", &0u32)
             .arg(d as u32)
-            .build().expect("Kernel substract build failed.")
+            .build()
+            .expect("Kernel substract build failed.")
     };
 
-    let kernel_solve = kde_box.pro_que.kernel_builder("solve")
+    let kernel_solve = pro_que
+        .kernel_builder("solve")
         .global_work_size(len_iteration)
         .arg(&tmp_matrix_buffer)
         .arg(&kde_box.chol_cov)
         .arg(d as u32)
-        .build().expect("Kernel solve build failed.");
+        .build()
+        .expect("Kernel solve build failed.");
 
-    let kernel_square = kde_box.pro_que.kernel_builder("square")
+    let kernel_square = pro_que
+        .kernel_builder("square")
         .arg(&tmp_matrix_buffer)
-        .build().expect("Kernel square build failed.");
+        .build()
+        .expect("Kernel square build failed.");
 
-    let kernel_sumout = kde_box.pro_que.kernel_builder("sumout")
+    let kernel_sumout = pro_que
+        .kernel_builder("sumout")
         .global_work_size(len_iteration)
         .arg(&tmp_matrix_buffer)
         .arg(&tmp_vec_buffer)
         .arg(d as u32)
         .arg(kde_box.lognorm_factor)
-        .build().expect("Kernel sumout build failed.");
+        .build()
+        .expect("Kernel sumout build failed.");
 
     if kde_box.n >= m {
         for i in 0..m {
             kernel_substract.set_arg("row", i as u32).unwrap();
-            kernel_substract.enq().expect("Error while executing substract kernel.");
-            kernel_solve.enq().expect("Error while executing solve kernel.");
-            kernel_square.enq().expect("Error while executing square kernel.");
-            kernel_sumout.enq().expect("Error while executing sumout kernel.");
-            sum_gpu_vec(&kde_box.pro_que, &tmp_vec_buffer,
-                        len_iteration, max_work_size, local_size, num_groups);
+            kernel_substract
+                .enq()
+                .expect("Error while executing substract kernel.");
+            kernel_solve
+                .enq()
+                .expect("Error while executing solve kernel.");
+            kernel_square
+                .enq()
+                .expect("Error while executing square kernel.");
+            kernel_sumout
+                .enq()
+                .expect("Error while executing sumout kernel.");
+            sum_gpu_vec(
+                &pro_que,
+                &tmp_vec_buffer,
+                len_iteration,
+                max_work_size,
+                local_size,
+                num_groups,
+            );
 
-            tmp_vec_buffer.copy(&final_result_buffer, Some(i), Some(1))
-                .queue(kde_box.pro_que.queue())
-                .enq().expect("Error copying to result buffer.");
+            tmp_vec_buffer
+                .copy(&final_result_buffer, Some(i), Some(1))
+                .queue(pro_que.queue())
+                .enq()
+                .expect("Error copying to result buffer.");
         }
     } else {
-        buffer_fill_value(&kde_box.pro_que, &final_result_buffer, m, 0.0f64);
+        buffer_fill_value(&pro_que, &final_result_buffer, m, 0.0f64);
 
         for i in 0..kde_box.n {
             kernel_substract.set_arg("row", i as u32).unwrap();
-            kernel_substract.enq().expect("Error while executing substract kernel.");
-            kernel_solve.enq().expect("Error while executing solve kernel.");
-            kernel_square.enq().expect("Error while executing square kernel.");
-            kernel_sumout.enq().expect("Error while executing sumout kernel.");
+            kernel_substract
+                .enq()
+                .expect("Error while executing substract kernel.");
+            kernel_solve
+                .enq()
+                .expect("Error while executing solve kernel.");
+            kernel_square
+                .enq()
+                .expect("Error while executing square kernel.");
+            kernel_sumout
+                .enq()
+                .expect("Error while executing sumout kernel.");
 
-            let kernel_sumvectors = kde_box.pro_que.kernel_builder("sum_vectors")
+            let kernel_sumvectors = pro_que
+                .kernel_builder("sum_vectors")
                 .global_work_size(m)
                 .arg(&final_result_buffer)
                 .arg(&tmp_vec_buffer)
-                .build().expect("Kernel sum_vectors build failed.");
+                .build()
+                .expect("Kernel sum_vectors build failed.");
 
-            kernel_sumvectors.enq().expect("Error while executing sum_vectors kernel.");
+            kernel_sumvectors
+                .enq()
+                .expect("Error while executing sum_vectors kernel.");
         }
-
     }
 
-    final_result_buffer.cmd().queue(kde_box.pro_que.queue())
-        .read(final_result).enq().expect("Error reading result data.");
+    final_result_buffer
+        .cmd()
+        .queue(pro_que.queue())
+        .read(final_result)
+        .enq()
+        .expect("Error reading result data.");
     *error = Error::NoError;
     Box::into_raw(kde_box);
+    Box::into_raw(pro_que);
 }
 
 /// Sums all the elements in the vector buffer `sum_buffer` and places the result in the first
@@ -544,20 +611,36 @@ pub unsafe extern "C" fn gaussian_kde_pdf(kde: *mut GaussianKDE,
 ///     \begin{bmatrix} \sum_{i=1}^{n} a_{i} & \ldots & \text{unexpected values} & \ldots
 /// \end{bmatrix}
 /// ```
-fn sum_gpu_vec(pro_que: &ProQue, sum_buffer: &Buffer<f64>, mut global_size: usize,
-               max_work_size: usize, mut local_size: usize, mut num_groups: usize) {
+fn sum_gpu_vec(
+    pro_que: &ProQue,
+    sum_buffer: &Buffer<f64>,
+    mut global_size: usize,
+    max_work_size: usize,
+    mut local_size: usize,
+    mut num_groups: usize,
+) {
     while global_size > 1 {
-        let kernel_sum_gpu = pro_que.kernel_builder("sum_gpu_vec")
+        let kernel_sum_gpu = pro_que
+            .kernel_builder("sum_gpu_vec")
             .global_work_size(global_size)
             .local_work_size(local_size)
             .arg(sum_buffer)
             .arg_local::<f64>(local_size)
-            .build().expect("Kernel sum_gpu_vec build failed.");
+            .build()
+            .expect("Kernel sum_gpu_vec build failed.");
 
-        unsafe { kernel_sum_gpu.enq().expect("Error while executing sum_gpu_vec kernel."); }
+        unsafe {
+            kernel_sum_gpu
+                .enq()
+                .expect("Error while executing sum_gpu_vec kernel.");
+        }
 
         global_size = num_groups;
-        local_size = if global_size < max_work_size { global_size } else { max_work_size };
+        local_size = if global_size < max_work_size {
+            global_size
+        } else {
+            max_work_size
+        };
         num_groups = (global_size as f32 / local_size as f32).ceil() as usize;
     }
 }
@@ -673,101 +756,143 @@ fn sum_gpu_vec(pro_que: &ProQue, sum_buffer: &Buffer<f64>, mut global_size: usiz
 /// `sum_gpu_mat` sums every exponentiated logpdf and the kernel `log_and_sum_mat` makes the
 /// logarithm of the previous step result and sums `maxexp`.
 #[no_mangle]
-pub unsafe extern "C"  fn gaussian_kde_logpdf(kde: *mut GaussianKDE,
-                                              x: *const DoubleNumpyArray,
-                                              result: *mut c_double,
-                                              error: *mut Error) {
+pub unsafe extern "C" fn gaussian_kde_logpdf(
+    kde: *mut GaussianKDE,
+    pro_que: *mut ProQue,
+    x: *const DoubleNumpyArray,
+    result: *mut c_double,
+    error: *mut Error,
+) {
     let mut kde_box = Box::from_raw(kde);
+    let mut pro_que = Box::from_raw(pro_que);
     let m = *(*x).shape;
     if kde_box.n >= m {
-        logpdf_iterate_test(&mut kde_box, x, result, error);
+        logpdf_iterate_test(&mut kde_box, &mut pro_que, x, result, error);
     } else {
-        logpdf_iterate_train(&mut kde_box, x, result, error);
+        logpdf_iterate_train(&mut kde_box, &mut pro_que, x, result, error);
     }
 
     *error = Error::NoError;
     Box::into_raw(kde_box);
+    Box::into_raw(pro_que);
 }
 
 /// We iterate over the test points if there are more training points.
-unsafe fn logpdf_iterate_test(kde: &mut Box<GaussianKDE>,
-                              x: *const DoubleNumpyArray,
-                              result: *mut c_double,
-                              error: *mut Error) {
+unsafe fn logpdf_iterate_test(
+    kde: &mut Box<GaussianKDE>,
+    pro_que: &mut Box<ProQue>,
+    x: *const DoubleNumpyArray,
+    result: *mut c_double,
+    error: *mut Error,
+) {
     let m = *(*x).shape;
     let d = kde.d;
     let final_result = slice::from_raw_parts_mut(result, m);
-    let max_work_size = get_max_work_size(&kde.pro_que);
+    let max_work_size = get_max_work_size(&pro_que);
 
     let n = kde.n;
-    kde.pro_que.set_dims(n*d);
+    pro_que.set_dims(n * d);
 
     let local_work_size = if n < max_work_size { n } else { max_work_size };
     let num_groups = (n as f32 / local_work_size as f32).ceil() as usize;
 
-    let test_slice = slice::from_raw_parts((*x).ptr, m*d);
+    let test_slice = slice::from_raw_parts((*x).ptr, m * d);
 
-    let (test_instances_buffer,) =
-        copy_buffers!(kde.pro_que, error, test_slice);
+    let (test_instances_buffer,) = copy_buffers!(pro_que, error, test_slice);
 
     let (max_buffer, final_result_buffer, tmp_matrix_buffer, tmp_vec_buffer) =
-        empty_buffers!(kde.pro_que, error, f64, num_groups, m, n*d, n);
+        empty_buffers!(pro_que, error, f64, num_groups, m, n * d, n);
 
-    let kernel_substract = kde.pro_que.kernel_builder("substract")
+    let kernel_substract = pro_que
+        .kernel_builder("substract")
         .arg(&kde.training_data)
         .arg(&test_instances_buffer)
         .arg(&tmp_matrix_buffer)
         .arg_named("row", &0u32)
         .arg(d as u32)
-        .build().expect("Kernel substract build failed.");
+        .build()
+        .expect("Kernel substract build failed.");
 
-    let kernel_solve = kde.pro_que.kernel_builder("solve")
+    let kernel_solve = pro_que
+        .kernel_builder("solve")
         .global_work_size(n)
         .arg(&tmp_matrix_buffer)
         .arg(&kde.chol_cov)
         .arg(d as u32)
-        .build().expect("Kernel solve build failed.");
+        .build()
+        .expect("Kernel solve build failed.");
 
-    let kernel_square = kde.pro_que.kernel_builder("square")
+    let kernel_square = pro_que
+        .kernel_builder("square")
         .arg(&tmp_matrix_buffer)
-        .build().expect("Kernel square build failed.");
+        .build()
+        .expect("Kernel square build failed.");
 
-    let kernel_sumout = kde.pro_que.kernel_builder("logsumout")
+    let kernel_sumout = pro_que
+        .kernel_builder("logsumout")
         .global_work_size(n)
         .arg(&tmp_matrix_buffer)
         .arg(&tmp_vec_buffer)
         .arg(d as u32)
         .arg(kde.lognorm_factor)
-        .build().expect("Kernel logsumout build failed.");
+        .build()
+        .expect("Kernel logsumout build failed.");
 
     for i in 0..m {
         kernel_substract.set_arg("row", i as u32).unwrap();
-        kernel_substract.enq().expect("Error while executing substract kernel.");
-        kernel_solve.enq().expect("Error while executing solve kernel.");
-        kernel_square.enq().expect("Error while executing square kernel.");
-        kernel_sumout.enq().expect("Error while executing logsumout kernel.");
+        kernel_substract
+            .enq()
+            .expect("Error while executing substract kernel.");
+        kernel_solve
+            .enq()
+            .expect("Error while executing solve kernel.");
+        kernel_square
+            .enq()
+            .expect("Error while executing square kernel.");
+        kernel_sumout
+            .enq()
+            .expect("Error while executing logsumout kernel.");
 
-        max_gpu_vec_copy(&kde.pro_que, &tmp_vec_buffer, &max_buffer,
-                         n, max_work_size, local_work_size, num_groups);
+        max_gpu_vec_copy(
+            &pro_que,
+            &tmp_vec_buffer,
+            &max_buffer,
+            n,
+            max_work_size,
+            local_work_size,
+            num_groups,
+        );
 
+        log_sum_gpu_vec(
+            &pro_que,
+            &tmp_vec_buffer,
+            &max_buffer,
+            n,
+            max_work_size,
+            local_work_size,
+            num_groups,
+        );
 
-        log_sum_gpu_vec(&kde.pro_que, &tmp_vec_buffer, &max_buffer,
-                        n, max_work_size, local_work_size, num_groups);
-
-        let kernel_log_sum_gpu = kde.pro_que.kernel_builder("copy_logpdf_result")
+        let kernel_log_sum_gpu = pro_que
+            .kernel_builder("copy_logpdf_result")
             .global_work_size(1)
             .arg(&tmp_vec_buffer)
             .arg(&max_buffer)
             .arg(&final_result_buffer)
             .arg(i as u32)
-            .build().expect("Kernel copy_logpdf_result build failed.");
+            .build()
+            .expect("Kernel copy_logpdf_result build failed.");
 
-        kernel_log_sum_gpu.enq()
+        kernel_log_sum_gpu
+            .enq()
             .expect("Error while executing copy_logpdf_result kernel.");
-
     }
-    final_result_buffer.cmd().queue(kde.pro_que.queue())
-        .read(final_result).enq().expect("Error reading result data.");
+    final_result_buffer
+        .cmd()
+        .queue(pro_que.queue())
+        .read(final_result)
+        .enq()
+        .expect("Error reading result data.");
 }
 
 /// Finds the maximum element in the vector buffer `max_buffer` and places the result in the first
@@ -794,35 +919,61 @@ unsafe fn logpdf_iterate_test(kde: &mut Box<GaussianKDE>,
 /// ```math
 ///     \begin{bmatrix} \max_{i} a_{i} & \ldots & \text{unexpected values} & \ldots \end{bmatrix}
 /// ```
-fn max_gpu_vec_copy(pro_que: &ProQue, max_buffer: &Buffer<f64>, result_buffer: &Buffer<f64>,
-                    mut global_size: usize, max_work_size: usize,
-                    mut local_size: usize, mut num_groups: usize) {
-    let kernel_max_gpu = pro_que.kernel_builder("max_gpu_vec_copy")
+fn max_gpu_vec_copy(
+    pro_que: &ProQue,
+    max_buffer: &Buffer<f64>,
+    result_buffer: &Buffer<f64>,
+    mut global_size: usize,
+    max_work_size: usize,
+    mut local_size: usize,
+    mut num_groups: usize,
+) {
+    let kernel_max_gpu = pro_que
+        .kernel_builder("max_gpu_vec_copy")
         .global_work_size(global_size)
         .local_work_size(local_size)
         .arg(max_buffer)
         .arg(result_buffer)
         .arg_local::<f64>(local_size)
-        .build().expect("Kernel max_gpu_vec_copy build failed.");
+        .build()
+        .expect("Kernel max_gpu_vec_copy build failed.");
 
-    unsafe { kernel_max_gpu.enq().expect("Error while executing max_gpu_vec_copy kernel."); }
+    unsafe {
+        kernel_max_gpu
+            .enq()
+            .expect("Error while executing max_gpu_vec_copy kernel.");
+    }
 
     global_size = num_groups;
-    local_size = if global_size < max_work_size { global_size } else { max_work_size };
+    local_size = if global_size < max_work_size {
+        global_size
+    } else {
+        max_work_size
+    };
     num_groups = (global_size as f32 / local_size as f32).ceil() as usize;
 
     while global_size > 1 {
-        let kernel_max_gpu = pro_que.kernel_builder("max_gpu_vec")
+        let kernel_max_gpu = pro_que
+            .kernel_builder("max_gpu_vec")
             .global_work_size(global_size)
             .local_work_size(local_size)
             .arg(result_buffer)
             .arg_local::<f64>(local_size)
-            .build().expect("Kernel max_gpu_vec build failed.");
+            .build()
+            .expect("Kernel max_gpu_vec build failed.");
 
-        unsafe { kernel_max_gpu.enq().expect("Error while executing max_gpu_vec kernel."); }
+        unsafe {
+            kernel_max_gpu
+                .enq()
+                .expect("Error while executing max_gpu_vec kernel.");
+        }
 
         global_size = num_groups;
-        local_size = if global_size < max_work_size { global_size } else { max_work_size };
+        local_size = if global_size < max_work_size {
+            global_size
+        } else {
+            max_work_size
+        };
         num_groups = (global_size as f32 / local_size as f32).ceil() as usize;
     }
 }
@@ -849,35 +1000,61 @@ fn max_gpu_vec_copy(pro_que: &ProQue, max_buffer: &Buffer<f64>, result_buffer: &
 /// [LogSumExp trick](https://en.wikipedia.org/wiki/LogSumExp). `maxexp[0]` should be the maximum
 /// of all the elements in `sum_buffer`. **This operation invalidates the rest of the data in
 /// `sum_buffer`**.
-fn log_sum_gpu_vec(pro_que: &ProQue, sum_buffer: &Buffer<f64>,
-                   maxexp: &Buffer<f64>, mut global_size: usize, max_work_size: usize,
-                   mut local_size: usize, mut num_groups: usize) {
-    let kernel_log_sum_gpu = pro_que.kernel_builder("log_sum_gpu_vec")
+fn log_sum_gpu_vec(
+    pro_que: &ProQue,
+    sum_buffer: &Buffer<f64>,
+    maxexp: &Buffer<f64>,
+    mut global_size: usize,
+    max_work_size: usize,
+    mut local_size: usize,
+    mut num_groups: usize,
+) {
+    let kernel_log_sum_gpu = pro_que
+        .kernel_builder("log_sum_gpu_vec")
         .global_work_size(global_size)
         .local_work_size(local_size)
         .arg(sum_buffer)
         .arg_local::<f64>(local_size)
         .arg(maxexp)
-        .build().expect("Kernel log_sum_gpu_vec build failed.");
+        .build()
+        .expect("Kernel log_sum_gpu_vec build failed.");
 
-    unsafe { kernel_log_sum_gpu.enq().expect("Error while executing log_sum_gpu_vec kernel."); }
+    unsafe {
+        kernel_log_sum_gpu
+            .enq()
+            .expect("Error while executing log_sum_gpu_vec kernel.");
+    }
 
     global_size = num_groups;
-    local_size = if global_size < max_work_size { global_size } else { max_work_size };
+    local_size = if global_size < max_work_size {
+        global_size
+    } else {
+        max_work_size
+    };
     num_groups = (global_size as f32 / local_size as f32).ceil() as usize;
 
     while global_size > 1 {
-        let kernel_sum_gpu_vec = pro_que.kernel_builder("sum_gpu_vec")
+        let kernel_sum_gpu_vec = pro_que
+            .kernel_builder("sum_gpu_vec")
             .global_work_size(global_size)
             .local_work_size(local_size)
             .arg(sum_buffer)
             .arg_local::<f64>(local_size)
-            .build().expect("Kernel sum_gpu_vec build failed.");
+            .build()
+            .expect("Kernel sum_gpu_vec build failed.");
 
-        unsafe { kernel_sum_gpu_vec.enq().expect("Error while executing sum_gpu_vec kernel."); }
+        unsafe {
+            kernel_sum_gpu_vec
+                .enq()
+                .expect("Error while executing sum_gpu_vec kernel.");
+        }
 
         global_size = num_groups;
-        local_size = if global_size < max_work_size { global_size } else { max_work_size };
+        local_size = if global_size < max_work_size {
+            global_size
+        } else {
+            max_work_size
+        };
         num_groups = (global_size as f32 / local_size as f32).ceil() as usize;
     }
 }
@@ -895,168 +1072,222 @@ fn log_sum_gpu_vec(pro_que: &ProQue, sum_buffer: &Buffer<f64>,
 /// the train data, the logpdf can be computed using the LogSumExp trick with the pre-computed
 /// maximums. This is implemented in
 /// [logpdf_iterate_train_low_memory](fn.logpdf_iterate_train_low_memory.html).
-unsafe fn logpdf_iterate_train(kde: &mut Box<GaussianKDE>,
-                               x: *const DoubleNumpyArray,
-                               result: *mut c_double,
-                               error: *mut Error) {
+unsafe fn logpdf_iterate_train(
+    kde: &mut Box<GaussianKDE>,
+    pro_que: &mut Box<ProQue>,
+    x: *const DoubleNumpyArray,
+    result: *mut c_double,
+    error: *mut Error,
+) {
     let m = *(*x).shape;
     let tmp_vec_buffer = Buffer::<f64>::builder()
-        .context(kde.pro_que.context())
-        .len(m*kde.n)
+        .context(pro_que.context())
+        .len(m * kde.n)
         .build();
 
     match tmp_vec_buffer {
-        Ok(b) => logpdf_iterate_train_high_memory(kde, x, result, &b, error),
+        Ok(b) => logpdf_iterate_train_high_memory(kde, pro_que, x, result, &b, error),
         Err(_) => {
-            let (tmp_vec_buffer,) = empty_buffers!(kde.pro_que, error, f64, m);
+            let (tmp_vec_buffer,) = empty_buffers!(pro_que, error, f64, m);
             // TODO: If n < 2m, is it better to iterate over the training data?
-            logpdf_iterate_train_low_memory(kde, x, result, &tmp_vec_buffer, error);
+            logpdf_iterate_train_low_memory(kde, pro_que, x, result, &tmp_vec_buffer, error);
         }
     }
 }
 
 /// Iterates twice over the training data to compute the logpdf of each test point using a $`m`$
 /// vector as described in [logpdf_iterate_train](fn.logpdf_iterate_train.html).
-unsafe fn logpdf_iterate_train_low_memory(kde: &mut Box<GaussianKDE>,
-                                          x: *const DoubleNumpyArray,
-                                          result: *mut c_double,
-                                          tmp_vec_buffer: &Buffer<f64>,
-                                          error: *mut Error) {
+unsafe fn logpdf_iterate_train_low_memory(
+    kde: &mut Box<GaussianKDE>,
+    pro_que: &mut Box<ProQue>,
+    x: *const DoubleNumpyArray,
+    result: *mut c_double,
+    tmp_vec_buffer: &Buffer<f64>,
+    error: *mut Error,
+) {
     let m = *(*x).shape;
     let d = kde.d;
 
     let final_result = slice::from_raw_parts_mut(result, m);
 
     let n = kde.n;
-    kde.pro_que.set_dims(m*d);
+    pro_que.set_dims(m * d);
 
-    let test_slice = slice::from_raw_parts((*x).ptr, m*d);
+    let test_slice = slice::from_raw_parts((*x).ptr, m * d);
 
-    let (test_instances_buffer,) = copy_buffers!(kde.pro_que, error, test_slice);
+    let (test_instances_buffer,) = copy_buffers!(pro_que, error, test_slice);
 
     let (max_buffer, final_result_buffer, tmp_matrix_buffer) =
-        empty_buffers!(kde.pro_que, error, f64, m, m, m*d);
+        empty_buffers!(pro_que, error, f64, m, m, m * d);
 
-    buffer_fill_value(&kde.pro_que, &max_buffer, m, f64::MIN);
-    buffer_fill_value(&kde.pro_que, &final_result_buffer, m, 0.0f64);
+    buffer_fill_value(&pro_que, &max_buffer, m, f64::MIN);
+    buffer_fill_value(&pro_que, &final_result_buffer, m, 0.0f64);
 
-    let kernel_substract = kde.pro_que.kernel_builder("substract")
+    let kernel_substract = pro_que
+        .kernel_builder("substract")
         .arg(&test_instances_buffer)
         .arg(&kde.training_data)
         .arg(&tmp_matrix_buffer)
         .arg_named("row", &0u32)
         .arg(d as u32)
-        .build().expect("Kernel substract build failed.");
+        .build()
+        .expect("Kernel substract build failed.");
 
-    let kernel_solve = kde.pro_que.kernel_builder("solve")
+    let kernel_solve = pro_que
+        .kernel_builder("solve")
         .global_work_size(m)
         .arg(&tmp_matrix_buffer)
         .arg(&kde.chol_cov)
         .arg(d as u32)
-        .build().expect("Kernel solve build failed.");
+        .build()
+        .expect("Kernel solve build failed.");
 
-    let kernel_square = kde.pro_que.kernel_builder("square")
+    let kernel_square = pro_que
+        .kernel_builder("square")
         .arg(&tmp_matrix_buffer)
-        .build().expect("Kernel square build failed.");
+        .build()
+        .expect("Kernel square build failed.");
 
-    let kernel_sumout = kde.pro_que.kernel_builder("logsumout")
+    let kernel_sumout = pro_que
+        .kernel_builder("logsumout")
         .global_work_size(m)
         .arg(&tmp_matrix_buffer)
         .arg(tmp_vec_buffer)
         .arg(d as u32)
         .arg(kde.lognorm_factor)
-        .build().expect("Kernel logsumout build failed.");
+        .build()
+        .expect("Kernel logsumout build failed.");
 
-    let kernel_sumout_checkmax = kde.pro_que.kernel_builder("logsumout_checkmax")
+    let kernel_sumout_checkmax = pro_que
+        .kernel_builder("logsumout_checkmax")
         .global_work_size(m)
         .arg(&tmp_matrix_buffer)
         .arg(tmp_vec_buffer)
         .arg(&max_buffer)
         .arg(d as u32)
         .arg(kde.lognorm_factor)
-        .build().expect("Kernel logsumout_checkmax build failed.");
+        .build()
+        .expect("Kernel logsumout_checkmax build failed.");
 
-    let kernel_expsum = kde.pro_que.kernel_builder("exp_and_sum")
+    let kernel_expsum = pro_que
+        .kernel_builder("exp_and_sum")
         .global_work_size(m)
         .arg(tmp_vec_buffer)
         .arg(&max_buffer)
         .arg(&final_result_buffer)
-        .build().expect("Kernel exp_and_sum build failed.");
+        .build()
+        .expect("Kernel exp_and_sum build failed.");
 
-    let kernel_log_and_sum = kde.pro_que.kernel_builder("log_and_sum")
+    let kernel_log_and_sum = pro_que
+        .kernel_builder("log_and_sum")
         .global_work_size(m)
         .arg(&final_result_buffer)
         .arg(&max_buffer)
-        .build().expect("Kernel log_and_sum build failed.");
+        .build()
+        .expect("Kernel log_and_sum build failed.");
 
     // Writes the max loglikelihoods in the max_buffer
     for i in 0..n {
         kernel_substract.set_arg("row", i as u32).unwrap();
-        kernel_substract.enq().expect("Error while executing substract kernel.");
-        kernel_solve.enq().expect("Error while executing solve kernel.");
-        kernel_square.enq().expect("Error while executing square kernel.");
-        kernel_sumout_checkmax.enq().expect("Error while executing logsumout_checkmax kernel.");
+        kernel_substract
+            .enq()
+            .expect("Error while executing substract kernel.");
+        kernel_solve
+            .enq()
+            .expect("Error while executing solve kernel.");
+        kernel_square
+            .enq()
+            .expect("Error while executing square kernel.");
+        kernel_sumout_checkmax
+            .enq()
+            .expect("Error while executing logsumout_checkmax kernel.");
     }
 
     // Computes the loglikelihood using the max_buffer.
     for i in 0..n {
         kernel_substract.set_arg("row", i as u32).unwrap();
-        kernel_substract.enq().expect("Error while executing substract kernel.");
-        kernel_solve.enq().expect("Error while executing solve kernel.");
-        kernel_square.enq().expect("Error while executing square kernel.");
-        kernel_sumout.enq().expect("Error while executing logsumout kernel.");
-        kernel_expsum.enq().expect("Error while executing exp_and_sum kernel.");
+        kernel_substract
+            .enq()
+            .expect("Error while executing substract kernel.");
+        kernel_solve
+            .enq()
+            .expect("Error while executing solve kernel.");
+        kernel_square
+            .enq()
+            .expect("Error while executing square kernel.");
+        kernel_sumout
+            .enq()
+            .expect("Error while executing logsumout kernel.");
+        kernel_expsum
+            .enq()
+            .expect("Error while executing exp_and_sum kernel.");
     }
-    kernel_log_and_sum.enq().expect("Error while executing log_and_sum kernel.");
-    final_result_buffer.cmd().queue(kde.pro_que.queue())
-        .read(final_result).enq().expect("Error reading result data.");
+    kernel_log_and_sum
+        .enq()
+        .expect("Error while executing log_and_sum kernel.");
+    final_result_buffer
+        .cmd()
+        .queue(pro_que.queue())
+        .read(final_result)
+        .enq()
+        .expect("Error reading result data.");
 }
 
 /// Iterates over the training data to compute the logpdf of each test point using a $`m \times n`$
 /// matrix as described in [logpdf_iterate_train](fn.logpdf_iterate_train.html).
-unsafe fn logpdf_iterate_train_high_memory(kde: &mut Box<GaussianKDE>,
-                                           x: *const DoubleNumpyArray,
-                                           result: *mut c_double,
-                                           tmp_vec_buffer: &Buffer<f64>,
-                                           error: *mut Error) {
+unsafe fn logpdf_iterate_train_high_memory(
+    kde: &mut Box<GaussianKDE>,
+    pro_que: &mut Box<ProQue>,
+    x: *const DoubleNumpyArray,
+    result: *mut c_double,
+    tmp_vec_buffer: &Buffer<f64>,
+    error: *mut Error,
+) {
     let m = *(*x).shape;
     let d = kde.d;
 
     let final_result = slice::from_raw_parts_mut(result, m);
 
     let n = kde.n;
-    kde.pro_que.set_dims(m*d);
+    pro_que.set_dims(m * d);
 
-    let max_work_size = get_max_work_size(&kde.pro_que);
+    let max_work_size = get_max_work_size(&pro_que);
     let local_work_size = if n < max_work_size { n } else { max_work_size };
     let num_groups = (n as f32 / local_work_size as f32).ceil() as usize;
 
-    let test_slice = slice::from_raw_parts((*x).ptr, m*d);
+    let test_slice = slice::from_raw_parts((*x).ptr, m * d);
 
-    let (test_instances_buffer,) = copy_buffers!(kde.pro_que, error, test_slice);
+    let (test_instances_buffer,) = copy_buffers!(pro_que, error, test_slice);
     let (max_buffer, final_result_buffer, tmp_matrix_buffer) =
-        empty_buffers!(kde.pro_que, error, f64, m*num_groups, m, m*d);
+        empty_buffers!(pro_que, error, f64, m * num_groups, m, m * d);
 
-    let kernel_substract = kde.pro_que.kernel_builder("substract")
+    let kernel_substract = pro_que
+        .kernel_builder("substract")
         .arg(&test_instances_buffer)
         .arg(&kde.training_data)
         .arg(&tmp_matrix_buffer)
         .arg_named("row", &0u32)
         .arg(d as u32)
-        .build().expect("Kernel substract build failed.");
+        .build()
+        .expect("Kernel substract build failed.");
 
-    let kernel_solve = kde.pro_que.kernel_builder("solve")
+    let kernel_solve = pro_que
+        .kernel_builder("solve")
         .global_work_size(m)
         .arg(&tmp_matrix_buffer)
         .arg(&kde.chol_cov)
         .arg(d as u32)
-        .build().expect("Kernel solve build failed.");
+        .build()
+        .expect("Kernel solve build failed.");
 
-    let kernel_square = kde.pro_que.kernel_builder("square")
+    let kernel_square = pro_que
+        .kernel_builder("square")
         .arg(&tmp_matrix_buffer)
-        .build().expect("Kernel square build failed.");
+        .build()
+        .expect("Kernel square build failed.");
 
-    let kernel_sumout = kde.pro_que.kernel_builder("logsumout_to_matrix")
+    let kernel_sumout = pro_que
+        .kernel_builder("logsumout_to_matrix")
         .global_work_size(m)
         .arg(&tmp_matrix_buffer)
         .arg(tmp_vec_buffer)
@@ -1064,43 +1295,79 @@ unsafe fn logpdf_iterate_train_high_memory(kde: &mut Box<GaussianKDE>,
         .arg_named("sol_row", &0u32)
         .arg(n as u32)
         .arg(kde.lognorm_factor)
-        .build().expect("Kernel logsumout_to_matrix build failed.");
+        .build()
+        .expect("Kernel logsumout_to_matrix build failed.");
 
-    let kernel_exp_and_sum = kde.pro_que.kernel_builder("exp_and_sum_mat")
+    let kernel_exp_and_sum = pro_que
+        .kernel_builder("exp_and_sum_mat")
         .global_work_size((m, n))
         .arg(tmp_vec_buffer)
         .arg(&max_buffer)
         .arg(num_groups as u32)
-        .build().expect("Kernel exp_and_sum_mat build failed.");
+        .build()
+        .expect("Kernel exp_and_sum_mat build failed.");
 
-    let kernel_log_and_sum = kde.pro_que.kernel_builder("log_and_sum_mat")
+    let kernel_log_and_sum = pro_que
+        .kernel_builder("log_and_sum_mat")
         .global_work_size(m)
         .arg(&final_result_buffer)
         .arg(tmp_vec_buffer)
         .arg(&max_buffer)
         .arg(n as u32)
         .arg(num_groups as u32)
-        .build().expect("Kernel log_and_sum_mat build failed.");
+        .build()
+        .expect("Kernel log_and_sum_mat build failed.");
 
     // Writes the max loglikelihoods in the max_buffer
     for i in 0..n {
         kernel_substract.set_arg("row", i as u32).unwrap();
-        kernel_substract.enq().expect("Error while executing substract kernel.");
-        kernel_solve.enq().expect("Error while executing solve kernel.");
-        kernel_square.enq().expect("Error while executing square kernel.");
+        kernel_substract
+            .enq()
+            .expect("Error while executing substract kernel.");
+        kernel_solve
+            .enq()
+            .expect("Error while executing solve kernel.");
+        kernel_square
+            .enq()
+            .expect("Error while executing square kernel.");
         kernel_sumout.set_arg("sol_row", i as u32).unwrap();
-        kernel_sumout.enq().expect("Error while executing logsumout_to_matrix kernel.");
+        kernel_sumout
+            .enq()
+            .expect("Error while executing logsumout_to_matrix kernel.");
     }
 
-    max_gpu_mat(&kde.pro_que, tmp_vec_buffer, &max_buffer,
-                m, n, max_work_size, local_work_size, num_groups);
-    kernel_exp_and_sum.enq().expect("Error while executing exp_and_sum_mat kernel.");
-    sum_gpu_mat(&kde.pro_que, tmp_vec_buffer, m,n,
-                max_work_size, local_work_size, num_groups);
+    max_gpu_mat(
+        &pro_que,
+        tmp_vec_buffer,
+        &max_buffer,
+        m,
+        n,
+        max_work_size,
+        local_work_size,
+        num_groups,
+    );
+    kernel_exp_and_sum
+        .enq()
+        .expect("Error while executing exp_and_sum_mat kernel.");
+    sum_gpu_mat(
+        &pro_que,
+        tmp_vec_buffer,
+        m,
+        n,
+        max_work_size,
+        local_work_size,
+        num_groups,
+    );
 
-    kernel_log_and_sum.enq().expect("Error while executing kernel log_and_sum_mat kernel.");
-    final_result_buffer.cmd().queue(kde.pro_que.queue())
-        .read(final_result).enq().expect("Error reading result data.");
+    kernel_log_and_sum
+        .enq()
+        .expect("Error while executing kernel log_and_sum_mat kernel.");
+    final_result_buffer
+        .cmd()
+        .queue(pro_que.queue())
+        .read(final_result)
+        .enq()
+        .expect("Error reading result data.");
 }
 
 /// Finds the maximum element of each row in the matrix buffer `max_buffer` and saves the result in
@@ -1128,38 +1395,65 @@ unsafe fn logpdf_iterate_train_high_memory(kde: &mut Box<GaussianKDE>,
 /// `max_buffer`. `max_work_size` is the maximum number of work items in a work group for the
 /// selected device. `local_size` is the actual number of work items in each work group.
 /// `num_groups` is the actual number of work groups and the number of columns in `result_buffer`.
-fn max_gpu_mat(pro_que: &ProQue, max_buffer: &Buffer<f64>, result_buffer: &Buffer<f64>,
-               n_rows: usize, mut n_cols: usize, max_work_size: usize,
-               mut local_size: usize, mut num_groups: usize) {
-    let kernel_max_gpu = pro_que.kernel_builder("max_gpu_mat_copy")
+fn max_gpu_mat(
+    pro_que: &ProQue,
+    max_buffer: &Buffer<f64>,
+    result_buffer: &Buffer<f64>,
+    n_rows: usize,
+    mut n_cols: usize,
+    max_work_size: usize,
+    mut local_size: usize,
+    mut num_groups: usize,
+) {
+    let kernel_max_gpu = pro_que
+        .kernel_builder("max_gpu_mat_copy")
         .global_work_size((n_rows, n_cols))
         .local_work_size((1, local_size))
         .arg(max_buffer)
         .arg(result_buffer)
         .arg_local::<f64>(local_size)
         .arg(n_cols as u32)
-        .build().expect("Kernel max_gpu_mat_copy build failed.");
+        .build()
+        .expect("Kernel max_gpu_mat_copy build failed.");
 
-    unsafe { kernel_max_gpu.enq().expect("Error while executing max_gpu_mat_copy kernel."); }
+    unsafe {
+        kernel_max_gpu
+            .enq()
+            .expect("Error while executing max_gpu_mat_copy kernel.");
+    }
 
     n_cols = num_groups;
-    local_size = if n_cols < max_work_size { n_cols } else { max_work_size };
+    local_size = if n_cols < max_work_size {
+        n_cols
+    } else {
+        max_work_size
+    };
     let matrix_actual_cols = num_groups;
     num_groups = (n_cols as f32 / local_size as f32).ceil() as usize;
 
     while n_cols > 1 {
-        let kernel_max_gpu = pro_que.kernel_builder("max_gpu_mat")
+        let kernel_max_gpu = pro_que
+            .kernel_builder("max_gpu_mat")
             .global_work_size((n_rows, n_cols))
             .local_work_size((1, local_size))
             .arg(result_buffer)
             .arg_local::<f64>(local_size)
             .arg(matrix_actual_cols as u32)
-            .build().expect("Kernel max_gpu_mat build failed.");
+            .build()
+            .expect("Kernel max_gpu_mat build failed.");
 
-        unsafe { kernel_max_gpu.enq().expect("Error while executing max_gpu_mat kernel."); }
+        unsafe {
+            kernel_max_gpu
+                .enq()
+                .expect("Error while executing max_gpu_mat kernel.");
+        }
 
         n_cols = num_groups;
-        local_size = if n_cols < max_work_size { n_cols } else { max_work_size };
+        local_size = if n_cols < max_work_size {
+            n_cols
+        } else {
+            max_work_size
+        };
         num_groups = (n_cols as f32 / local_size as f32).ceil() as usize;
     }
 }
@@ -1189,23 +1483,39 @@ fn max_gpu_mat(pro_que: &ProQue, max_buffer: &Buffer<f64>, result_buffer: &Buffe
 /// `max_buffer`. `max_work_size` is the maximum number of work items in a work group for the
 /// selected device. `local_size` is the actual number of work items in each work group.
 /// `num_groups` is the actual number of work groups and the number of columns in `result_buffer`.
-fn sum_gpu_mat(pro_que: &ProQue, sum_buffer: &Buffer<f64>,
-               n_rows: usize, mut n_cols: usize, max_work_size: usize,
-               mut local_size: usize, mut num_groups: usize) {
+fn sum_gpu_mat(
+    pro_que: &ProQue,
+    sum_buffer: &Buffer<f64>,
+    n_rows: usize,
+    mut n_cols: usize,
+    max_work_size: usize,
+    mut local_size: usize,
+    mut num_groups: usize,
+) {
     let n_cols_orig = n_cols as u32;
     while n_cols > 1 {
-        let kernel_sum_gpu_mat = pro_que.kernel_builder("sum_gpu_mat")
+        let kernel_sum_gpu_mat = pro_que
+            .kernel_builder("sum_gpu_mat")
             .global_work_size((n_rows, n_cols))
             .local_work_size((1, local_size))
             .arg(sum_buffer)
             .arg_local::<f64>(local_size)
             .arg(n_cols_orig)
-            .build().expect("Kernel sum_gpu_mat build failed.");
+            .build()
+            .expect("Kernel sum_gpu_mat build failed.");
 
-        unsafe { kernel_sum_gpu_mat.enq().expect("Error while executing sum_gpu_mat kernel."); }
+        unsafe {
+            kernel_sum_gpu_mat
+                .enq()
+                .expect("Error while executing sum_gpu_mat kernel.");
+        }
 
         n_cols = num_groups;
-        local_size = if n_cols < max_work_size { n_cols } else { max_work_size };
+        local_size = if n_cols < max_work_size {
+            n_cols
+        } else {
+            max_work_size
+        };
         num_groups = (n_cols as f32 / local_size as f32).ceil() as usize;
     }
 }

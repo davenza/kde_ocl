@@ -3,18 +3,13 @@ import setuptools
 import os
 import shutil
 
-long_description = """This repository implements Gaussian [Kernel Density Estimation](https://en.wikipedia.org/wiki/Kernel_density_estimation) using 
-OpenCL to achieve important performance gains:
-
-
-The Python interface is based on the [Scipy's `gaussian_kde`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.gaussian_kde.html) class, 
-so it should be pretty easy to replace the CPU implementation of `gaussian_kde` with the
-OpenCL implementation in this repository `gaussian_kde_ocl`."""
+with open("README.md", "r") as fh:
+    long_description = fh.read()
 
 def build_native(spec):
     # build an example rust library
     build = spec.add_external_build(
-        cmd=['cargo', 'build', '--release'],
+        cmd=['cargo', 'rustc', '--release', '--', '-C', 'target-cpu=native'],
         path='./rust'
     )
 
@@ -60,16 +55,17 @@ class CleanCommand(distutils.cmd.Command):
 
 setuptools.setup(
     name="kde_ocl",
-    version="0.1",
+    version="0.1.0",
     author="David Atienza",
     author_email="datienza@fi.upm.es",
     description="An OpenCL implementation of Kernel Density Estimation",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/javatechy/dokr",
+    url="https://github.com/davenza/kde_ocl",
     packages=["kde_ocl"],
     classifiers=[
-        "Programming Language :: Python :: 3",
+        "Programming Language :: Python:: 2.7",
+        "Programming Language :: Python:: 3",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],

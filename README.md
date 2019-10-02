@@ -6,6 +6,51 @@ The Python interface is based on the [Scipy's `gaussian_kde`](https://docs.scipy
 so it should be pretty easy to replace the CPU implementation of `gaussian_kde` with the
 OpenCL implementation in this repository `gaussian_kde_ocl`.
 
+
+## Example Code
+
+
+```python
+import numpy as np
+from kde_ocl import gaussian_kde_ocl
+
+# Generate dummy training data (10000 instances of 2D data)
+train = np.random.multivariate_normal([0,0], [[1,0],[0,1]], 10000)
+# Generate dummy test data (10000 instances of 2D data)
+test = np.random.multivariate_normal([0,0], [[1,0],[0,1]], 100)
+
+# Train the KDE model
+kde = gaussian_kde_ocl(train)
+
+# Get the pdf of each test point. This is equivalent to kde.pdf(test)
+pdf = kde(test)
+
+# Get the logpdf of each test point. This is equivalent to kde.pdf(test)
+logpdf = kde.logpdf(test)
+```
+
+*The interface is mostly the same as Scipy's `gaussian_kde`, but the axis order is changed*. For example, training a 
+Scipy's `gaussian_kde` with a numpy array of shape (10000, 2) is interpreted as two instances of 10000 dimensions. In
+`gaussian_kde_ocl`, this data is interpreted as 10000 instances of 2 dimensions. This change makes easier to work with
+`pandas` dataframes:
+
+```python
+import pandas as pd
+import numpy as np
+from kde_ocl import gaussian_kde_ocl
+
+# Create pandas dataframe 
+a = np.random.normal(0, 1, 5000)
+b = np.random.normal(3.2, np.sqrt(1.8), 5000)
+data = pd.DataFrame({'a': a, 'b': b})
+
+# Train KDE model
+kde = gaussian_kde_ocl(data.values)
+
+# Evaluate one point
+logpdf = kde.logpdf([1.1, 2.3])
+```
+
 ## Performance
 
 This is a comparison of the `gaussian_kde_ocl` and Scipy's `gaussian_kde` with 2D data and the following configuration:
@@ -45,7 +90,7 @@ Training instances / Test instances | `gaussian_kde_ocl.logpdf()` | `gaussian_kd
 The library is Python 2/3 compatible. Currently, is tested in Ubuntu 16.04, but should be compatible with other operating systems where
 there are OpenCL GPU support.
 
-### Python dependencies
+### Python Dependencies
 
 The project has the following Python dependencies:
 

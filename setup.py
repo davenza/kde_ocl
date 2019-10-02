@@ -7,9 +7,8 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 def build_native(spec):
-    # build an example rust library
     build = spec.add_external_build(
-        cmd=['cargo', 'rustc', '--release', '--', '-C', 'target-cpu=native'],
+        cmd=['cargo', 'build', '--release'],
         path='./rust'
     )
 

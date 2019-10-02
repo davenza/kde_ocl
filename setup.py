@@ -52,35 +52,35 @@ class CleanCommand(distutils.cmd.Command):
         os.system("cargo clean")
         os.chdir(current_dir)
 
-        folders_to_delete = [".eggs", "kde_ocl.egg-info", "build"]
+        folders_to_delete = [".eggs", "kde_ocl.egg-info", "build", "dist"]
 
         for folder in folders_to_delete:
             if os.path.exists(folder):
                 shutil.rmtree(folder)
 
 setuptools.setup(
-    name='kde_ocl',
-    version='0.1',
+    name="kde_ocl",
+    version="0.1",
     author="David Atienza",
     author_email="datienza@fi.upm.es",
     description="An OpenCL implementation of Kernel Density Estimation",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/javatechy/dokr",
-    packages=['kde_ocl'],
+    packages=["kde_ocl"],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
     zip_safe=False,
-    platforms='any',
-    setup_requires=['milksnake'],
-    install_requires=['milksnake', "numpy", "six"],
+    platforms="any",
+    setup_requires=["milksnake"],
+    install_requires=["milksnake", "numpy", "six"],
     milksnake_tasks=[
         build_native
     ],
     cmdclass={
-        'clean': CleanCommand,
+        "clean": CleanCommand,
     },
 )

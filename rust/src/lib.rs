@@ -1,4 +1,4 @@
-//! The crate 'gaussian_kde_ocl' implements
+//! The crate `kde_ocl_sys` implements
 //! [Kernel Density Estimation](https://en.wikipedia.org/wiki/Kernel_density_estimation) (KDE) using
 //! OpenCL to accelerate the computation with GPUs. Currently, it only implements the (multivariate)
 //! Gaussian kernel. This crate is an auxiliary library for the Python code using it along with this

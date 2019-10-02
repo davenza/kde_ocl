@@ -1,0 +1,6 @@
+include rust/src/lib.rs
+include rust/src/kde_gaussian.cl
+include rust/src/util_macros.rs
+include rust/build.rs
+include rust/Cargo.toml
+include rust/cbindgen.toml

@@ -110,6 +110,8 @@ pip install cffi numpy six
 
 The [Rust](https://www.rust-lang.org/) compiler must be installed in the system. Check out [https://www.rust-lang.org/tools/install](https://www.rust-lang.org/tools/install) for more information.
 
+The default Rust toolchain is used to compile the library, so **make sure to install a Rust toolchain (32 vs 64 bits) compatible with the Python interpreter version (32 vs 64 bits).**
+
 ### OpenCL
 
 The GPU drivers that enable OpenCL should be installed.

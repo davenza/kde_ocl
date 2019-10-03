@@ -93,8 +93,8 @@ setuptools.setup(
     url="https://github.com/davenza/kde_ocl",
     packages=["kde_ocl"],
     classifiers=[
-        "Programming Language :: Python:: 2.7",
-        "Programming Language :: Python:: 3",
+        "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],

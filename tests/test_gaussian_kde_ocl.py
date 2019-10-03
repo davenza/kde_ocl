@@ -34,7 +34,9 @@ def test_pdf_2d(n_train, n_test):
 
     assert np.isclose(pdf_scipy, pdf_ocl[:100]).all()
 
-@pytest.mark.benchmark
+
+@pytest.mark.times_ocl
+@pytest.mark.times
 @pytest.mark.parametrize("n_train, n_test", [(100000, 1000), (1000, 10000000), (100, 10000)])
 def test_pdf_2d_benchmark_ocl(benchmark, n_train, n_test):
     np.random.seed(0)
@@ -45,7 +47,8 @@ def test_pdf_2d_benchmark_ocl(benchmark, n_train, n_test):
 
     benchmark(kde_ocl.pdf, test)
 
-@pytest.mark.benchmark
+@pytest.mark.times_scipy
+@pytest.mark.times
 @pytest.mark.parametrize("n_train, n_test", [(100000, 1000), (1000, 10000000), (100, 10000)])
 def test_pdf_2d_benchmark_scipy(benchmark, n_train, n_test):
     np.random.seed(0)
@@ -56,7 +59,8 @@ def test_pdf_2d_benchmark_scipy(benchmark, n_train, n_test):
 
     benchmark(kde_ocl.pdf, test.T)
 
-@pytest.mark.benchmark
+@pytest.mark.times_ocl
+@pytest.mark.times
 @pytest.mark.parametrize("n_train, n_test", [(100000, 1000), (1000, 10000000), (100, 10000)])
 def test_logpdf_2d_benchmark_ocl(benchmark, n_train, n_test):
     np.random.seed(0)
@@ -67,8 +71,8 @@ def test_logpdf_2d_benchmark_ocl(benchmark, n_train, n_test):
 
     benchmark(kde_ocl.logpdf, test)
 
-@pytest.mark.benchmark
-# @pytest.mark.parametrize("n_train, n_test", [(100000, 1000), (1000, 10000000), (100, 10000)])
+@pytest.mark.times_scipy
+@pytest.mark.times
 @pytest.mark.parametrize("n_train, n_test", [(100000, 1000), (100, 10000)])
 def test_logpdf_2d_benchmark_scipy(benchmark, n_train, n_test):
     np.random.seed(0)

@@ -140,5 +140,18 @@ pip pytest-benchmark
 Then, execute the tests with benchmarks enabled:
 
 ``
-pytest --benchmark
+pytest --times
+``
+
+To run only the OpenCL benchmarks:
+
+``
+pytest --times-ocl
+``
+
+To run only the Scipy's `gaussian_kde` benchmarks:
+
+
+``
+pytest --times-scipy
 ``

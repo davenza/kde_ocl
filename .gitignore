@@ -4,3 +4,4 @@
 *.csv
 *.pyc
 Cargo.lock
+dist/

@@ -76,7 +76,7 @@ class CleanCommand(distutils.cmd.Command):
         os.system("cargo clean")
         os.chdir(current_dir)
 
-        folders_to_delete = [".eggs", "kde_ocl.egg-info", "build", "dist"]
+        folders_to_delete = [".eggs", "kde_ocl.egg-info", "build"]
 
         for folder in folders_to_delete:
             if os.path.exists(folder):

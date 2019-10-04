@@ -7,7 +7,7 @@ so it should be pretty easy to replace the CPU implementation of `gaussian_kde` 
 OpenCL implementation in this repository `gaussian_kde_ocl`.
 
 
-## Example Code
+# Example Code
 
 
 ```python
@@ -29,7 +29,7 @@ pdf = kde(test)
 logpdf = kde.logpdf(test)
 ```
 
-*The interface is mostly the same as Scipy's `gaussian_kde`, but the axis order is changed*. For example, training a 
+**The interface is mostly the same as Scipy's `gaussian_kde`, but the axis order is changed**. For example, training a 
 Scipy's `gaussian_kde` with a numpy array of shape (10000, 2) is interpreted as two instances of 10000 dimensions. In
 `gaussian_kde_ocl`, this data is interpreted as 10000 instances of 2 dimensions. This change makes easier to work with
 `pandas` dataframes:
@@ -51,7 +51,7 @@ kde = gaussian_kde_ocl(data.values)
 logpdf = kde.logpdf([1.1, 2.3])
 ```
 
-## Performance
+# Performance
 
 This is a comparison of the `gaussian_kde_ocl` and Scipy's `gaussian_kde` with 2D data and the following configuration:
 
@@ -61,7 +61,7 @@ This is a comparison of the `gaussian_kde_ocl` and Scipy's `gaussian_kde` with 2
 - Ubuntu 16.04
 
 
-### ``pdf()`` method
+## ``pdf()`` method
 
 Training instances / Test instances | `gaussian_kde_ocl.pdf()`    | `gaussian_kde.pdf()`            | Speedup |
 ------------------------------------|-----------------------------| --------------------------------|-----------------|
@@ -69,7 +69,7 @@ Training instances / Test instances | `gaussian_kde_ocl.pdf()`    | `gaussian_kd
 1,000 / 10,000,000                  | 18.8643 &plusmn; 0.07322 s  | 237.3429 &plusmn; 1.1765 s      | 12.58x  |
 100 / 10,000                        | 4.4533 &plusmn; 0.7297 ms   | 18.0684 &plusmn; 0.3302 ms      | 4.46x   |
 
-### ``logpdf()`` method
+## ``logpdf()`` method
 
 
 Training instances / Test instances | `gaussian_kde_ocl.logpdf()` | `gaussian_kde.logpdf()`         | Speedup |
@@ -79,18 +79,18 @@ Training instances / Test instances | `gaussian_kde_ocl.logpdf()` | `gaussian_kd
 100 / 10,000                        | 8.827 &plusmn; 0.7442 ms    | 34.1114 &plusmn; 1.3060 ms      | 3.86x   |
 
 
-## Current Limitations
+# Current Limitations
 
 - Only C order (the default) numpy arrays can be used as traning/test datasets.
 - Only Gaussian kernels are implemented.
 - OpenCL device is selected automatically.
 
-## Dependencies
+# Dependencies
 
 The library is Python 2/3 compatible. Currently, is tested in Ubuntu 16.04, but should be compatible with other operating systems where
 there are OpenCL GPU support.
 
-### Python Dependencies
+## Python Dependencies
 
 The project has the following Python dependencies:
 
@@ -106,18 +106,18 @@ You can install them with:
 pip install cffi numpy six
 ``
 
-### Rust
+## Rust
 
 The [Rust](https://www.rust-lang.org/) compiler must be installed in the system. Check out [https://www.rust-lang.org/tools/install](https://www.rust-lang.org/tools/install) for more information.
 
 The default Rust toolchain is used to compile the library, so **make sure to install a Rust toolchain (32 vs 64 bits) compatible with the Python interpreter version (32 vs 64 bits).**
 
-### OpenCL
+## OpenCL
 
 The GPU drivers that enable OpenCL should be installed.
 
 
-## Testing
+# Testing
 
 Tests are run using pytest and requires `scipy` to compare `gaussian_kde_ocl` with Scipy's `gaussian_kde`. Install them:
 
@@ -131,7 +131,7 @@ Run the tests with:
 pytest
 ``
 
-### Benchmarks
+## Benchmarks
 
 To run the benchmarks, `pytest-benchmark` is needed:
 

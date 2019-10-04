@@ -17,7 +17,10 @@ def test_pdf_1d(n_train, n_test):
     pdf_scipy = kde_scipy(test[:100])
     pdf_ocl = kde_ocl(test)
 
-    assert np.isclose(pdf_scipy, pdf_ocl[:100]).all()
+    close = np.isclose(pdf_scipy, pdf_ocl[:100])
+
+    assert close.all(), "Different pdf values: \n\tScipy values: " + str(pdf_scipy[~close]) + \
+                        "\n\tocl values: " + str(pdf_ocl[:100][~close])
 
 @pytest.mark.parametrize("n_train, n_test", [(100000, 1000), (1000, 10000000), (100, 10000)])
 def test_pdf_2d(n_train, n_test):
@@ -32,7 +35,10 @@ def test_pdf_2d(n_train, n_test):
     pdf_scipy = kde_scipy(test[:100].T)
     pdf_ocl = kde_ocl(test)
 
-    assert np.isclose(pdf_scipy, pdf_ocl[:100]).all()
+    close = np.isclose(pdf_scipy, pdf_ocl[:100])
+
+    assert close.all(), "Different pdf values: \n\tScipy values: " + str(pdf_scipy[~close]) + \
+                        "\n\tocl values: " + str(pdf_ocl[:100][~close])
 
 
 @pytest.mark.times_ocl

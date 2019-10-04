@@ -116,6 +116,19 @@ The default Rust toolchain is used to compile the library, so **make sure to ins
 
 The GPU drivers that enable OpenCL should be installed.
 
+# Installation
+
+Use pip:
+
+``
+pip install kde_ocl
+``
+
+Alternatively, clone the repository and use the setup script:
+
+``
+python setup.py install
+``
 
 # Testing
 

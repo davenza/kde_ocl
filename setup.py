@@ -7,6 +7,11 @@ import shutil
 import subprocess
 import platform
 
+import glob
+from distutils import log
+from numpy.distutils.conv_template import process_file as process_c_file
+
+
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
@@ -19,7 +24,7 @@ def check_rust_bitness():
 
     if python_bitness == "32bit":
         if not "i686" in toolchain:
-            print("WARNING: Python interpreter is 32-bit, while default Rust target toolchain is not 32-bit.\n"
+            log.warn("WARNING: Python interpreter is 32-bit, while default Rust target toolchain is not 32-bit.\n"
                             "\tUse \"rustup target list\" to list all the available Rust target toolchains.\n"
                             "\tUse \"rustup target add {toolchain_name}\" to include a compatible Rust target toolchain.\n"
                             "\tUse \"rustup default {toolchain_name}\" to set a default target toolchain.\n",
@@ -27,14 +32,27 @@ def check_rust_bitness():
 
     if python_bitness == "64bit":
         if not "64" in toolchain:
-            print("WARNING: Python interpreter is 64-bit, while default Rust target toolchain is not 64-bit.\n"
+            log.warn("WARNING: Python interpreter is 64-bit, while default Rust target toolchain is not 64-bit.\n"
                             "\tUse \"rustup target list\" to list all the available Rust target toolchains.\n"
                             "\tUse \"rustup target add {toolchain_name}\" to include a compatible Rust target toolchain.\n"
                             "\tUse \"rustup default {toolchain_name}\" to set a default target toolchain.\n",
                    file=sys.stderr)
 
+def expand_sources(target_dir):
+    sources = glob.glob(os.path.join(target_dir, "*.src"))
+
+    for source in sources:
+        (base, _) = os.path.splitext(source)
+        log.info("conv_template:> %s" % (source))
+        outstr = process_c_file(source)
+        with open(base, 'w') as fid:
+            fid.write(outstr)
+
+
 def build_native(spec):
     check_rust_bitness()
+
+    expand_sources('./rust/src')
 
     build = spec.add_external_build(
         cmd=['cargo', 'build', '--release'],

@@ -15,6 +15,6 @@ fn main() {
 
 
     let src = fs::read_to_string("src/kde_gaussian.cl").expect("Error while reading OpenCL code file.");
-    let rust_cl_code = format!("pub const OPEN_CL_CODE: &str = \"{}\";", src);
+    let rust_cl_code = format!("pub const OPEN_CL_CODE: &str = r#\"{}\"#;", src);
     fs::write("src/open_cl_code.rs", rust_cl_code).expect("Unable to write OpenCL Rust code");
 }

@@ -762,13 +762,14 @@ pub unsafe extern "C" fn gaussian_kde_logpdf(
     let mut kde_box = Box::from_raw(kde);
     let mut pro_que = Box::from_raw(pro_que);
     let m = *(*x).shape;
+
+    *error = Error::NoError;
     if kde_box.n >= m {
         logpdf_iterate_test(&mut kde_box, &mut pro_que, x, result, error);
     } else {
         logpdf_iterate_train(&mut kde_box, &mut pro_que, x, result, error);
     }
 
-    *error = Error::NoError;
     Box::into_raw(kde_box);
     Box::into_raw(pro_que);
 }
@@ -895,7 +896,7 @@ unsafe fn logpdf_iterate_test(
 /// position of `result_buffer` (i.e., `result_buffer[0]`). **This operation invalidates the rest
 /// of the data in `result_buffer`**, but keeps constant `max_buffer`.
 ///
-/// `global_size` is the length of the `sum_buffer`. `max_work_size` is the maximum
+/// `global_size` is the length of the `max_buffer`. `max_work_size` is the maximum
 /// number of work items in a work group for the selected device. `local_size` is the actual number
 /// of work items in each work group. `num_groups` is the actual number of work groups.
 ///

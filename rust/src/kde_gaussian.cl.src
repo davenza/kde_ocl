@@ -30,19 +30,28 @@ __kernel void sum_vectors(__global double *left, __constant double *right) {
  */
 
 /**begin repeat
- * #mode = rowmajor, columnmajor#
- * #indexer = RM, CM#
+ * #train_mode = rowmajor, columnmajor#
+ * #train_indexer = RM, CM#
  */
 
-__kernel void substract_@mode@(__constant double *train_data,
+/**begin repeat1
+ * #test_mode = rowmajor, columnmajor#
+ * #test_indexer = RM, CM#
+ */
+
+__kernel void substract_@train_mode@_@test_mode@(__constant double *train_data,
                         __constant double *vec,
                         __global double *res,
                         __private uint row,
-                        __private uint leading_dimension) {
-    int i = get_global_id(0);
-    int c = i % n_col;
-    res[i] = train_data[i] - vec[@indexer@(row, c, leading_dimension)];
+                        __private uint train_leading_dimension,
+                        __private uint test_leading_dimension) {
+    int r = get_global_id(0);
+    int c = get_global_id(1);
+    int mat_index = @train_indexer@(r, c, train_leading_dimension);
+    res[RM(r, c, get_global_size(1))] = train_data[mat_index] - vec[@test_indexer@(row, c, test_leading_dimension)];
 }
+
+/**end repeat1**/
 
 /**end repeat**/
 

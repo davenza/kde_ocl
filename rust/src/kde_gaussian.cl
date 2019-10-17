@@ -41,28 +41,70 @@ __kernel void sum_vectors(__global double *left, __constant double *right) {
 
 #line 36
 
-__kernel void substract_rowmajor(__constant double *train_data,
+#line 41
+
+__kernel void substract_rowmajor_rowmajor(__constant double *train_data,
                         __constant double *vec,
                         __global double *res,
                         __private uint row,
-                        __private uint leading_dimension) {
-    int i = get_global_id(0);
-    int c = i % n_col;
-    res[i] = train_data[i] - vec[RM(row, c, leading_dimension)];
+                        __private uint train_leading_dimension,
+                        __private uint test_leading_dimension) {
+    int r = get_global_id(0);
+    int c = get_global_id(1);
+    int mat_index = RM(r, c, train_leading_dimension);
+    res[RM(r, c, get_global_size(1))] = train_data[mat_index] - vec[RM(row, c, test_leading_dimension)];
 }
+
+
+#line 41
+
+__kernel void substract_rowmajor_columnmajor(__constant double *train_data,
+                        __constant double *vec,
+                        __global double *res,
+                        __private uint row,
+                        __private uint train_leading_dimension,
+                        __private uint test_leading_dimension) {
+    int r = get_global_id(0);
+    int c = get_global_id(1);
+    int mat_index = RM(r, c, train_leading_dimension);
+    res[RM(r, c, get_global_size(1))] = train_data[mat_index] - vec[CM(row, c, test_leading_dimension)];
+}
+
+
 
 
 #line 36
 
-__kernel void substract_columnmajor(__constant double *train_data,
+#line 41
+
+__kernel void substract_columnmajor_rowmajor(__constant double *train_data,
                         __constant double *vec,
                         __global double *res,
                         __private uint row,
-                        __private uint leading_dimension) {
-    int i = get_global_id(0);
-    int c = i % n_col;
-    res[i] = train_data[i] - vec[CM(row, c, leading_dimension)];
+                        __private uint train_leading_dimension,
+                        __private uint test_leading_dimension) {
+    int r = get_global_id(0);
+    int c = get_global_id(1);
+    int mat_index = CM(r, c, train_leading_dimension);
+    res[RM(r, c, get_global_size(1))] = train_data[mat_index] - vec[RM(row, c, test_leading_dimension)];
 }
+
+
+#line 41
+
+__kernel void substract_columnmajor_columnmajor(__constant double *train_data,
+                        __constant double *vec,
+                        __global double *res,
+                        __private uint row,
+                        __private uint train_leading_dimension,
+                        __private uint test_leading_dimension) {
+    int r = get_global_id(0);
+    int c = get_global_id(1);
+    int mat_index = CM(r, c, train_leading_dimension);
+    res[RM(r, c, get_global_size(1))] = train_data[mat_index] - vec[CM(row, c, test_leading_dimension)];
+}
+
+
 
 
 

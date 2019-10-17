@@ -83,8 +83,6 @@ extern crate ndarray;
 extern crate num;
 
 extern crate ocl;
-#[macro_use]
-extern crate paste;
 
 use libc::{c_double, size_t};
 use ndarray::{Array2, ShapeBuilder};
@@ -165,6 +163,8 @@ pub struct GaussianKDE {
     /// \log (2\pi)^{d/2} \sqrt{\lvert\mathbf{\Sigma}}\rvert
     /// ```
     lognorm_factor: f64,
+    rowmajor: bool,
+    leading_dimension: usize
 }
 
 /// Gets the maximum work group size of the default device. This is the preferred local work size
@@ -247,12 +247,16 @@ pub unsafe extern "C" fn gaussian_kde_init(
     let (training_buffer, chol_buffer) =
         copy_buffers!(pro_que, error, training_slice, chol_vec => ptr::null_mut());
 
+    let (rowmajor, leading_dimension) = is_rowmajor(training_data);
+
     let kde = Box::new(GaussianKDE {
         n,
         d,
         training_data: training_buffer,
         chol_cov: chol_buffer,
         lognorm_factor,
+        rowmajor,
+        leading_dimension
     });
 
     let ptr_kde = Box::into_raw(kde);
@@ -285,621 +289,351 @@ pub extern "C" fn gaussian_proque_free(pro_que: *mut ProQue) {
     }
 }
 
-///// Computes the probability density function (pdf) evaluation of $`m`$ points given a KDE model.
-///// The $`m`$ testing points are in the `testing_data` `DoubleNumpyArray` with shape ($`m`$, $`d`$).
-///// The result is saved in the `result` array, that should have at least length $`m`$.
-/////
-///// # Safety
-/////
-///// This function is unsafe because it receives a Numpy array pointers wrapped in the
-///// `DoubleNumpyArray` struct. Those matrices should not point to invalid data. Also, the kde and
-///// result pointers should not point to NULL.
-/////
-///// # Implementation
-/////
-///// To compute the pdf, it iterates over the training data or the test data depending on which data
-///// set has more instances. The general procedure is discussed in the
-///// [main description](index.html).
-/////
-///// ## Iterating over the test data
-/////
-///// If $`\mathbf{D}`$ is the $`n \times d`$ matrix containing the training instances, and
-///// $`\mathbf{t}^{k}`$ is a test instance. We iterate over all the $`\mathbf{t}^{k},\;
-///// k=1,\ldots,m`$
-/////
-///// ### Substract kernel
-/////
-///// The substract OpenCL kernel, substracts the test instance from
-///// all the training data:
-/////
-///// ```math
-///// \mathbf{D} = \begin{bmatrix}
-///// d_{11} & \cdots & d_{1d}\\
-///// \vdots & \ddots & \vdots\\
-///// d_{n1} & \cdots & d_{nd}\\
-///// \end{bmatrix},
-///// \mathbf{t}^{k} = \begin{bmatrix} t_{1}^{k} & \cdots & t_{d}^{k}\end{bmatrix},\;
-///// \text{substract}(\mathbf{D}, \mathbf{t}) = \mathbf{S}^{k} = \begin{bmatrix}
-///// d_{11} - t_{1}^{k} & \cdots & d_{1d} - t_{d}^{k}\\
-///// \vdots & \ddots & \vdots\\
-///// d_{n1} - t_{1}^{k} & \cdots & d_{nd} - t_{d}^{k}\\
-///// \end{bmatrix}
-///// ```
-/////
-///// ### Solve kernel
-/////
-///// The solve kernel performs forward-solving over the substracted matrix. If $`\mathbf{L}`$ is the:
-///// Cholesky matrix, and $`\mathbf{S}`$ the substracted matrix, the solved matrix $`\mathbf{V}`$
-///// should hold:
-/////
-///// ```math
-/////  \mathbf{L}\mathbf{V}^{k} = \mathbf{S}^{k}
-///// ```
-///// ```math
-/////  \begin{bmatrix}
-///// l_{11} & \mathbf{0} & 0\\
-///// \vdots & l_{ii} & \mathbf{0}\\
-///// l_{d1} & \cdots & l_{dd}\\
-/////  \end{bmatrix}
-///// \begin{bmatrix}
-///// v_{11} & \cdots & v_{1n}\\
-///// \vdots & \ddots & \vdots\\
-///// v_{d1} & \cdots & v_{dn}\\
-///// \end{bmatrix} =
-///// \begin{bmatrix}
-///// s_{11} & \cdots & s_{1n}\\
-///// \vdots & \ddots & \vdots\\
-///// s_{d1} & \cdots & s_{dn}\\
-///// \end{bmatrix}
-///// ```
-///// Then,
-/////
-///// ```math
-///// \begin{bmatrix}
-///// v_{11} & \cdots & v_{1n}\\
-///// \vdots & \ddots & \vdots\\
-///// v_{d1} & \cdots & v_{dn}\\
-///// \end{bmatrix} =
-///// \begin{bmatrix}
-///// s_{11} / l_{11} & \cdots & v_{1n} / l_{11}\\
-///// \vdots & \ddots & \vdots\\
-///// \frac{s_{d1} - \sum_{j=1}^{d-1} v_{j1}l_{dj}}{l_{dd}} & \cdots &
-///// \frac{s_{dn} - \sum_{j=1}^{d-1} v_{jn}l_{dj}}{l_{dd}}\\
-///// \end{bmatrix} =
-/////
-///// \begin{bmatrix} (\mathbf{y}^{1})^{T} & \cdots (\mathbf{y}^{i})^{T} &
-///// \cdots (\mathbf{y}^{n})^{T}\end{bmatrix}
-///// ```
-/////
-///// ### Square kernel
-/////
-///// The square kernel squares every element of a matrix. So,
-///// ```math
-///// \begin{bmatrix}
-///// v_{11} & \cdots & v_{1n}\\
-///// \vdots & \ddots & \vdots\\
-///// v_{d1} & \cdots & v_{dn}\\
-///// \end{bmatrix},\; \text{square}(\mathbf{V}) = \mathbf{W}^{k} =
-///// \begin{bmatrix}
-///// v_{11}^{2} & \cdots & v_{1n}^{2}\\
-///// \vdots & \ddots & \vdots\\
-///// v_{d1}^{2} & \cdots & v_{dn}^{2}\\
-///// \end{bmatrix}
-///// ```
-/////
-///// ### Sumout kernel
-/////
-///// It sums over all the rows in the $`\mathbf{V}`$ matrix and exponentiates the sum.
-/////
-///// ```math
-///// \mathbf{W} = \begin{bmatrix}
-///// w_{11} & \cdots & w_{1n}\\
-///// \vdots & \ddots & \vdots\\
-///// w_{d1} & \cdots & w_{dn}\\
-///// \end{bmatrix},\;
-///// \text{sumout}(\mathbf{W}) =
-///// \mathbf{u}^{k} = \begin{bmatrix}
-///// \exp\left(\sum_{i=1}^{d} w_{i1}\right) & \cdots & \exp\left(\sum_{i=1}^{d} w_{in}\right)\\
-///// \end{bmatrix}
-///// ```
-/////
-///// ### sum_gpu function
-/////
-///// It sums all the elements in a vector. The sum of the vector $`\mathbf{u}`$ is the pdf for the
-///// instance $`\mathbf{t}`$:
-/////
-///// ```math
-///// \hat{f}_{n}(\mathbf{t}) = \sum_{i=1}^{n} u_{i}^{k}
-///// ```
-///// ## Iterating over the train data
-/////
-///// When iterating over the train data, the kernels `substract`, `solve`, `square` and `sumout` are
-///// applied exactly as in [Iterating over the test data](#iterating-over-the-test-data), but in
-///// this case the test data and the train instance $`\mathbf{r}^{k},\; k=1,\ldots,n`$
-///// is substracted.
-/////
-///// Then the vector $`\mathbf{u}^{k}`$ represents the contribution of the $`\mathbf{r}^{k}`$
-///// instance to every other test instance.
-/////
-///// ### Sum_vectors kernel
-/////
-///// The pdf result for a test instance implies the sum over all the $`\mathbf{u}^{k}`$ vectors:
-/////
-///// ```math
-/////     \hat{f}_{n}(\mathbf{t}^{j}) = \sum_{k=1}^{n} u_{i}^{j}
-///// ```
-/////
-///// These sums are performed all at once using the sum_vectors kernel, that sums two vectors. If
-///// $`\mathbf{v} = \begin{bmatrix} v_{1} & \cdots & v_{n}\end{bmatrix}`$ and
-///// $`\mathbf{w} = \begin{bmatrix} w_{1} & \cdots & w_{n}\end{bmatrix}`$, then:
-/////
-///// ```math
-/////     \text{sum\_vectors}(\mathbf{v}, \mathbf{w}) = \begin{bmatrix} v_{1} + w_{1} & \cdots &
-/////         v_{n} + w_{n}\end{bmatrix}
-///// ```
-//#[no_mangle]
-//pub unsafe extern "C" fn gaussian_kde_pdf(
-//    kde: *mut GaussianKDE,
-//    pro_que: *mut ProQue,
-//    testing_data: *const DoubleNumpyArray,
-//    result: *mut c_double,
-//    error: *mut Error,
-//) {
-//    let kde_box = Box::from_raw(kde);
-//    let mut pro_que = Box::from_raw(pro_que);
-//
-//    let m = *(*testing_data).shape;
-//    let final_result = slice::from_raw_parts_mut(result, m);
-//
-//    let max_work_size = get_max_work_size(&pro_que);
-//
-//    let d = kde_box.d;
-//    //    Iterates over training or testing data?
-//    let len_iteration = if kde_box.n >= m { kde_box.n } else { m };
-//
-//    pro_que.set_dims(len_iteration * d);
-//
-//    let local_size = if len_iteration < max_work_size {
-//        len_iteration
-//    } else {
-//        max_work_size
-//    };
-//    let num_groups = (len_iteration as f32 / local_size as f32).ceil() as usize;
-//
-//    let test_slice = slice::from_raw_parts((*testing_data).ptr, m * d);
-//
-//    let (test_instances_buffer,) = copy_buffers!(pro_que, error, test_slice);
-//
-//    let (final_result_buffer, tmp_matrix_buffer, tmp_vec_buffer) =
-//        empty_buffers!(pro_que, error, f64, m, len_iteration * d, len_iteration);
-//
-//    let kernel_substract = {
-//        let (matrix_buf, vec_buf) = if kde_box.n >= m {
-//            (&kde_box.training_data, &test_instances_buffer)
-//        } else {
-//            (&test_instances_buffer, &kde_box.training_data)
-//        };
-//
-//        pro_que
-//            .kernel_builder("substract")
-//            .arg(matrix_buf)
-//            .arg(vec_buf)
-//            .arg(&tmp_matrix_buffer)
-//            .arg_named("row", &0u32)
-//            .arg(d as u32)
-//            .build()
-//            .expect("Kernel substract build failed.")
-//    };
-//
-//    let kernel_solve = pro_que
-//        .kernel_builder("solve")
-//        .global_work_size(len_iteration)
-//        .arg(&tmp_matrix_buffer)
-//        .arg(&kde_box.chol_cov)
-//        .arg(d as u32)
-//        .build()
-//        .expect("Kernel solve build failed.");
-//
-//    let kernel_square = pro_que
-//        .kernel_builder("square")
-//        .arg(&tmp_matrix_buffer)
-//        .build()
-//        .expect("Kernel square build failed.");
-//
-//    let kernel_sumout = pro_que
-//        .kernel_builder("sumout")
-//        .global_work_size(len_iteration)
-//        .arg(&tmp_matrix_buffer)
-//        .arg(&tmp_vec_buffer)
-//        .arg(d as u32)
-//        .arg(kde_box.lognorm_factor)
-//        .build()
-//        .expect("Kernel sumout build failed.");
-//
-//    if kde_box.n >= m {
-//        for i in 0..m {
-//            kernel_substract.set_arg("row", i as u32).unwrap();
-//            kernel_substract
-//                .enq()
-//                .expect("Error while executing substract kernel.");
-//            kernel_solve
-//                .enq()
-//                .expect("Error while executing solve kernel.");
-//            kernel_square
-//                .enq()
-//                .expect("Error while executing square kernel.");
-//            kernel_sumout
-//                .enq()
-//                .expect("Error while executing sumout kernel.");
-//            sum_gpu_vec(
-//                &pro_que,
-//                &tmp_vec_buffer,
-//                len_iteration,
-//                max_work_size,
-//                local_size,
-//                num_groups,
-//            );
-//
-//            tmp_vec_buffer
-//                .copy(&final_result_buffer, Some(i), Some(1))
-//                .queue(pro_que.queue())
-//                .enq()
-//                .expect("Error copying to result buffer.");
-//        }
-//    } else {
-//        buffer_fill_value(&pro_que, &final_result_buffer, m, 0.0f64);
-//
-//        for i in 0..kde_box.n {
-//            kernel_substract.set_arg("row", i as u32).unwrap();
-//            kernel_substract
-//                .enq()
-//                .expect("Error while executing substract kernel.");
-//            kernel_solve
-//                .enq()
-//                .expect("Error while executing solve kernel.");
-//            kernel_square
-//                .enq()
-//                .expect("Error while executing square kernel.");
-//            kernel_sumout
-//                .enq()
-//                .expect("Error while executing sumout kernel.");
-//
-//            let kernel_sumvectors = pro_que
-//                .kernel_builder("sum_vectors")
-//                .global_work_size(m)
-//                .arg(&final_result_buffer)
-//                .arg(&tmp_vec_buffer)
-//                .build()
-//                .expect("Kernel sum_vectors build failed.");
-//
-//            kernel_sumvectors
-//                .enq()
-//                .expect("Error while executing sum_vectors kernel.");
-//        }
-//    }
-//
-//    final_result_buffer
-//        .cmd()
-//        .queue(pro_que.queue())
-//        .read(final_result)
-//        .enq()
-//        .expect("Error reading result data.");
-//    *error = Error::NoError;
-//    Box::into_raw(kde_box);
-//    Box::into_raw(pro_que);
-//}
+unsafe fn is_rowmajor(x: *const DoubleNumpyArray) -> (bool, usize) {
+    let row_stride = *(*x).strides;
+    let column_stride = *(*x).strides.offset(1);
 
-macro_rules! impl_gaussian_kde_pdf {
-    ($mode:ident) => {
-    /// Computes the probability density function (pdf) evaluation of $`m`$ points given a KDE model.
-    /// The $`m`$ testing points are in the `testing_data` `DoubleNumpyArray` with shape ($`m`$, $`d`$).
-    /// The result is saved in the `result` array, that should have at least length $`m`$.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe because it receives a Numpy array pointers wrapped in the
-    /// `DoubleNumpyArray` struct. Those matrices should not point to invalid data. Also, the kde and
-    /// result pointers should not point to NULL.
-    ///
-    /// # Implementation
-    ///
-    /// To compute the pdf, it iterates over the training data or the test data depending on which data
-    /// set has more instances. The general procedure is discussed in the
-    /// [main description](index.html).
-    ///
-    /// ## Iterating over the test data
-    ///
-    /// If $`\mathbf{D}`$ is the $`n \times d`$ matrix containing the training instances, and
-    /// $`\mathbf{t}^{k}`$ is a test instance. We iterate over all the $`\mathbf{t}^{k},\;
-    /// k=1,\ldots,m`$
-    ///
-    /// ### Substract kernel
-    ///
-    /// The substract OpenCL kernel, substracts the test instance from
-    /// all the training data:
-    ///
-    /// ```math
-    /// \mathbf{D} = \begin{bmatrix}
-    /// d_{11} & \cdots & d_{1d}\\
-    /// \vdots & \ddots & \vdots\\
-    /// d_{n1} & \cdots & d_{nd}\\
-    /// \end{bmatrix},
-    /// \mathbf{t}^{k} = \begin{bmatrix} t_{1}^{k} & \cdots & t_{d}^{k}\end{bmatrix},\;
-    /// \text{substract}(\mathbf{D}, \mathbf{t}) = \mathbf{S}^{k} = \begin{bmatrix}
-    /// d_{11} - t_{1}^{k} & \cdots & d_{1d} - t_{d}^{k}\\
-    /// \vdots & \ddots & \vdots\\
-    /// d_{n1} - t_{1}^{k} & \cdots & d_{nd} - t_{d}^{k}\\
-    /// \end{bmatrix}
-    /// ```
-    ///
-    /// ### Solve kernel
-    ///
-    /// The solve kernel performs forward-solving over the substracted matrix. If $`\mathbf{L}`$ is the:
-    /// Cholesky matrix, and $`\mathbf{S}`$ the substracted matrix, the solved matrix $`\mathbf{V}`$
-    /// should hold:
-    ///
-    /// ```math
-    ///  \mathbf{L}\mathbf{V}^{k} = \mathbf{S}^{k}
-    /// ```
-    /// ```math
-    ///  \begin{bmatrix}
-    /// l_{11} & \mathbf{0} & 0\\
-    /// \vdots & l_{ii} & \mathbf{0}\\
-    /// l_{d1} & \cdots & l_{dd}\\
-    ///  \end{bmatrix}
-    /// \begin{bmatrix}
-    /// v_{11} & \cdots & v_{1n}\\
-    /// \vdots & \ddots & \vdots\\
-    /// v_{d1} & \cdots & v_{dn}\\
-    /// \end{bmatrix} =
-    /// \begin{bmatrix}
-    /// s_{11} & \cdots & s_{1n}\\
-    /// \vdots & \ddots & \vdots\\
-    /// s_{d1} & \cdots & s_{dn}\\
-    /// \end{bmatrix}
-    /// ```
-    /// Then,
-    ///
-    /// ```math
-    /// \begin{bmatrix}
-    /// v_{11} & \cdots & v_{1n}\\
-    /// \vdots & \ddots & \vdots\\
-    /// v_{d1} & \cdots & v_{dn}\\
-    /// \end{bmatrix} =
-    /// \begin{bmatrix}
-    /// s_{11} / l_{11} & \cdots & v_{1n} / l_{11}\\
-    /// \vdots & \ddots & \vdots\\
-    /// \frac{s_{d1} - \sum_{j=1}^{d-1} v_{j1}l_{dj}}{l_{dd}} & \cdots &
-    /// \frac{s_{dn} - \sum_{j=1}^{d-1} v_{jn}l_{dj}}{l_{dd}}\\
-    /// \end{bmatrix} =
-    ///
-    /// \begin{bmatrix} (\mathbf{y}^{1})^{T} & \cdots (\mathbf{y}^{i})^{T} &
-    /// \cdots (\mathbf{y}^{n})^{T}\end{bmatrix}
-    /// ```
-    ///
-    /// ### Square kernel
-    ///
-    /// The square kernel squares every element of a matrix. So,
-    /// ```math
-    /// \begin{bmatrix}
-    /// v_{11} & \cdots & v_{1n}\\
-    /// \vdots & \ddots & \vdots\\
-    /// v_{d1} & \cdots & v_{dn}\\
-    /// \end{bmatrix},\; \text{square}(\mathbf{V}) = \mathbf{W}^{k} =
-    /// \begin{bmatrix}
-    /// v_{11}^{2} & \cdots & v_{1n}^{2}\\
-    /// \vdots & \ddots & \vdots\\
-    /// v_{d1}^{2} & \cdots & v_{dn}^{2}\\
-    /// \end{bmatrix}
-    /// ```
-    ///
-    /// ### Sumout kernel
-    ///
-    /// It sums over all the rows in the $`\mathbf{V}`$ matrix and exponentiates the sum.
-    ///
-    /// ```math
-    /// \mathbf{W} = \begin{bmatrix}
-    /// w_{11} & \cdots & w_{1n}\\
-    /// \vdots & \ddots & \vdots\\
-    /// w_{d1} & \cdots & w_{dn}\\
-    /// \end{bmatrix},\;
-    /// \text{sumout}(\mathbf{W}) =
-    /// \mathbf{u}^{k} = \begin{bmatrix}
-    /// \exp\left(\sum_{i=1}^{d} w_{i1}\right) & \cdots & \exp\left(\sum_{i=1}^{d} w_{in}\right)\\
-    /// \end{bmatrix}
-    /// ```
-    ///
-    /// ### sum_gpu function
-    ///
-    /// It sums all the elements in a vector. The sum of the vector $`\mathbf{u}`$ is the pdf for the
-    /// instance $`\mathbf{t}`$:
-    ///
-    /// ```math
-    /// \hat{f}_{n}(\mathbf{t}) = \sum_{i=1}^{n} u_{i}^{k}
-    /// ```
-    /// ## Iterating over the train data
-    ///
-    /// When iterating over the train data, the kernels `substract`, `solve`, `square` and `sumout` are
-    /// applied exactly as in [Iterating over the test data](#iterating-over-the-test-data), but in
-    /// this case the test data and the train instance $`\mathbf{r}^{k},\; k=1,\ldots,n`$
-    /// is substracted.
-    ///
-    /// Then the vector $`\mathbf{u}^{k}`$ represents the contribution of the $`\mathbf{r}^{k}`$
-    /// instance to every other test instance.
-    ///
-    /// ### Sum_vectors kernel
-    ///
-    /// The pdf result for a test instance implies the sum over all the $`\mathbf{u}^{k}`$ vectors:
-    ///
-    /// ```math
-    ///     \hat{f}_{n}(\mathbf{t}^{j}) = \sum_{k=1}^{n} u_{i}^{j}
-    /// ```
-    ///
-    /// These sums are performed all at once using the sum_vectors kernel, that sums two vectors. If
-    /// $`\mathbf{v} = \begin{bmatrix} v_{1} & \cdots & v_{n}\end{bmatrix}`$ and
-    /// $`\mathbf{w} = \begin{bmatrix} w_{1} & \cdots & w_{n}\end{bmatrix}`$, then:
-    ///
-    /// ```math
-    ///     \text{sum\_vectors}(\mathbf{v}, \mathbf{w}) = \begin{bmatrix} v_{1} + w_{1} & \cdots &
-    ///         v_{n} + w_{n}\end{bmatrix}
-    /// ```
-    #[no_mangle]
-    pub unsafe extern "C" fn expr!{[<gaussian_kde_pdf_ $mode>]}(
-
-        kde: *mut GaussianKDE,
-        pro_que: *mut ProQue,
-        testing_data: *const DoubleNumpyArray,
-        result: *mut c_double,
-        error: *mut Error,
-    ) {
-        let kde_box = Box::from_raw(kde);
-        let mut pro_que = Box::from_raw(pro_que);
-
-        let m = *(*testing_data).shape;
-        let final_result = slice::from_raw_parts_mut(result, m);
-
-        let max_work_size = get_max_work_size(&pro_que);
-
-        let d = kde_box.d;
-        //    Iterates over training or testing data?
-        let len_iteration = if kde_box.n >= m { kde_box.n } else { m };
-
-        pro_que.set_dims(len_iteration * d);
-
-        let local_size = if len_iteration < max_work_size {
-            len_iteration
-        } else {
-            max_work_size
-        };
-        let num_groups = (len_iteration as f32 / local_size as f32).ceil() as usize;
-
-        let test_slice = slice::from_raw_parts((*testing_data).ptr, m * d);
-
-        let (test_instances_buffer,) = copy_buffers!(pro_que, error, test_slice);
-
-        let (final_result_buffer, tmp_matrix_buffer, tmp_vec_buffer) =
-            empty_buffers!(pro_que, error, f64, m, len_iteration * d, len_iteration);
-
-        let kernel_substract = {
-            let (matrix_buf, vec_buf) = if kde_box.n >= m {
-                (&kde_box.training_data, &test_instances_buffer)
-            } else {
-                (&test_instances_buffer, &kde_box.training_data)
-            };
-
-            pro_que
-                .kernel_builder("substract")
-                .arg(matrix_buf)
-                .arg(vec_buf)
-                .arg(&tmp_matrix_buffer)
-                .arg_named("row", &0u32)
-                .arg(d as u32)
-                .build()
-                .expect("Kernel substract build failed.")
-        };
-
-        let kernel_solve = pro_que
-            .kernel_builder("solve")
-            .global_work_size(len_iteration)
-            .arg(&tmp_matrix_buffer)
-            .arg(&kde_box.chol_cov)
-            .arg(d as u32)
-            .build()
-            .expect("Kernel solve build failed.");
-
-        let kernel_square = pro_que
-            .kernel_builder("square")
-            .arg(&tmp_matrix_buffer)
-            .build()
-            .expect("Kernel square build failed.");
-
-        let kernel_sumout = pro_que
-            .kernel_builder("sumout")
-            .global_work_size(len_iteration)
-            .arg(&tmp_matrix_buffer)
-            .arg(&tmp_vec_buffer)
-            .arg(d as u32)
-            .arg(kde_box.lognorm_factor)
-            .build()
-            .expect("Kernel sumout build failed.");
-
-        if kde_box.n >= m {
-            for i in 0..m {
-                kernel_substract.set_arg("row", i as u32).unwrap();
-                kernel_substract
-                    .enq()
-                    .expect("Error while executing substract kernel.");
-                kernel_solve
-                    .enq()
-                    .expect("Error while executing solve kernel.");
-                kernel_square
-                    .enq()
-                    .expect("Error while executing square kernel.");
-                kernel_sumout
-                    .enq()
-                    .expect("Error while executing sumout kernel.");
-                sum_gpu_vec(
-                    &pro_que,
-                    &tmp_vec_buffer,
-                    len_iteration,
-                    max_work_size,
-                    local_size,
-                    num_groups,
-                );
-
-                tmp_vec_buffer
-                    .copy(&final_result_buffer, Some(i), Some(1))
-                    .queue(pro_que.queue())
-                    .enq()
-                    .expect("Error copying to result buffer.");
-            }
-        } else {
-            buffer_fill_value(&pro_que, &final_result_buffer, m, 0.0f64);
-
-            for i in 0..kde_box.n {
-                kernel_substract.set_arg("row", i as u32).unwrap();
-                kernel_substract
-                    .enq()
-                    .expect("Error while executing substract kernel.");
-                kernel_solve
-                    .enq()
-                    .expect("Error while executing solve kernel.");
-                kernel_square
-                    .enq()
-                    .expect("Error while executing square kernel.");
-                kernel_sumout
-                    .enq()
-                    .expect("Error while executing sumout kernel.");
-
-                let kernel_sumvectors = pro_que
-                    .kernel_builder("sum_vectors")
-                    .global_work_size(m)
-                    .arg(&final_result_buffer)
-                    .arg(&tmp_vec_buffer)
-                    .build()
-                    .expect("Kernel sum_vectors build failed.");
-
-                kernel_sumvectors
-                    .enq()
-                    .expect("Error while executing sum_vectors kernel.");
-            }
-        }
-
-        final_result_buffer
-            .cmd()
-            .queue(pro_que.queue())
-            .read(final_result)
-            .enq()
-            .expect("Error reading result data.");
-        *error = Error::NoError;
-        Box::into_raw(kde_box);
-        Box::into_raw(pro_que);
+    println!("\tRow stride = {}", row_stride);
+    println!("\tColumn stride = {}", column_stride);
+    if row_stride > column_stride {
+        (true, *(*x).shape.offset(1))
+    } else {
+        (false, *(*x).shape)
     }
-    };
 }
 
-impl_gaussian_kde_pdf!(rowmajor);
-impl_gaussian_kde_pdf!(columnmajor);
+fn kernel_substract_name(train_rowmajor: bool, test_rowmajor: bool) -> &'static str {
+    if train_rowmajor {
+        if test_rowmajor {
+            "substract_rowmajor_rowmajor"
+        } else {
+            "substract_rowmajor_columnmajor"
+        }
+    } else {
+        if test_rowmajor {
+            "substract_columnmajor_rowmajor"
+        } else {
+            "substract_columnmajor_columnmajor"
+        }
+    }
+}
+
+/// Computes the probability density function (pdf) evaluation of $`m`$ points given a KDE model.
+/// The $`m`$ testing points are in the `testing_data` `DoubleNumpyArray` with shape ($`m`$, $`d`$).
+/// The result is saved in the `result` array, that should have at least length $`m`$.
+///
+/// # Safety
+///
+/// This function is unsafe because it receives a Numpy array pointers wrapped in the
+/// `DoubleNumpyArray` struct. Those matrices should not point to invalid data. Also, the kde and
+/// result pointers should not point to NULL.
+///
+/// # Implementation
+///
+/// To compute the pdf, it iterates over the training data or the test data depending on which data
+/// set has more instances. The general procedure is discussed in the
+/// [main description](index.html).
+///
+/// ## Iterating over the test data
+///
+/// If $`\mathbf{D}`$ is the $`n \times d`$ matrix containing the training instances, and
+/// $`\mathbf{t}^{k}`$ is a test instance. We iterate over all the $`\mathbf{t}^{k},\;
+/// k=1,\ldots,m`$
+///
+/// ### Substract kernel
+///
+/// The substract OpenCL kernel, substracts the test instance from
+/// all the training data:
+///
+/// ```math
+/// \mathbf{D} = \begin{bmatrix}
+/// d_{11} & \cdots & d_{1d}\\
+/// \vdots & \ddots & \vdots\\
+/// d_{n1} & \cdots & d_{nd}\\
+/// \end{bmatrix},
+/// \mathbf{t}^{k} = \begin{bmatrix} t_{1}^{k} & \cdots & t_{d}^{k}\end{bmatrix},\;
+/// \text{substract}(\mathbf{D}, \mathbf{t}) = \mathbf{S}^{k} = \begin{bmatrix}
+/// d_{11} - t_{1}^{k} & \cdots & d_{1d} - t_{d}^{k}\\
+/// \vdots & \ddots & \vdots\\
+/// d_{n1} - t_{1}^{k} & \cdots & d_{nd} - t_{d}^{k}\\
+/// \end{bmatrix}
+/// ```
+///
+/// ### Solve kernel
+///
+/// The solve kernel performs forward-solving over the substracted matrix. If $`\mathbf{L}`$ is the:
+/// Cholesky matrix, and $`\mathbf{S}`$ the substracted matrix, the solved matrix $`\mathbf{V}`$
+/// should hold:
+///
+/// ```math
+///  \mathbf{L}\mathbf{V}^{k} = \mathbf{S}^{k}
+/// ```
+/// ```math
+///  \begin{bmatrix}
+/// l_{11} & \mathbf{0} & 0\\
+/// \vdots & l_{ii} & \mathbf{0}\\
+/// l_{d1} & \cdots & l_{dd}\\
+///  \end{bmatrix}
+/// \begin{bmatrix}
+/// v_{11} & \cdots & v_{1n}\\
+/// \vdots & \ddots & \vdots\\
+/// v_{d1} & \cdots & v_{dn}\\
+/// \end{bmatrix} =
+/// \begin{bmatrix}
+/// s_{11} & \cdots & s_{1n}\\
+/// \vdots & \ddots & \vdots\\
+/// s_{d1} & \cdots & s_{dn}\\
+/// \end{bmatrix}
+/// ```
+/// Then,
+///
+/// ```math
+/// \begin{bmatrix}
+/// v_{11} & \cdots & v_{1n}\\
+/// \vdots & \ddots & \vdots\\
+/// v_{d1} & \cdots & v_{dn}\\
+/// \end{bmatrix} =
+/// \begin{bmatrix}
+/// s_{11} / l_{11} & \cdots & v_{1n} / l_{11}\\
+/// \vdots & \ddots & \vdots\\
+/// \frac{s_{d1} - \sum_{j=1}^{d-1} v_{j1}l_{dj}}{l_{dd}} & \cdots &
+/// \frac{s_{dn} - \sum_{j=1}^{d-1} v_{jn}l_{dj}}{l_{dd}}\\
+/// \end{bmatrix} =
+///
+/// \begin{bmatrix} (\mathbf{y}^{1})^{T} & \cdots (\mathbf{y}^{i})^{T} &
+/// \cdots (\mathbf{y}^{n})^{T}\end{bmatrix}
+/// ```
+///
+/// ### Square kernel
+///
+/// The square kernel squares every element of a matrix. So,
+/// ```math
+/// \begin{bmatrix}
+/// v_{11} & \cdots & v_{1n}\\
+/// \vdots & \ddots & \vdots\\
+/// v_{d1} & \cdots & v_{dn}\\
+/// \end{bmatrix},\; \text{square}(\mathbf{V}) = \mathbf{W}^{k} =
+/// \begin{bmatrix}
+/// v_{11}^{2} & \cdots & v_{1n}^{2}\\
+/// \vdots & \ddots & \vdots\\
+/// v_{d1}^{2} & \cdots & v_{dn}^{2}\\
+/// \end{bmatrix}
+/// ```
+///
+/// ### Sumout kernel
+///
+/// It sums over all the rows in the $`\mathbf{V}`$ matrix and exponentiates the sum.
+///
+/// ```math
+/// \mathbf{W} = \begin{bmatrix}
+/// w_{11} & \cdots & w_{1n}\\
+/// \vdots & \ddots & \vdots\\
+/// w_{d1} & \cdots & w_{dn}\\
+/// \end{bmatrix},\;
+/// \text{sumout}(\mathbf{W}) =
+/// \mathbf{u}^{k} = \begin{bmatrix}
+/// \exp\left(\sum_{i=1}^{d} w_{i1}\right) & \cdots & \exp\left(\sum_{i=1}^{d} w_{in}\right)\\
+/// \end{bmatrix}
+/// ```
+///
+/// ### sum_gpu function
+///
+/// It sums all the elements in a vector. The sum of the vector $`\mathbf{u}`$ is the pdf for the
+/// instance $`\mathbf{t}`$:
+///
+/// ```math
+/// \hat{f}_{n}(\mathbf{t}) = \sum_{i=1}^{n} u_{i}^{k}
+/// ```
+/// ## Iterating over the train data
+///
+/// When iterating over the train data, the kernels `substract`, `solve`, `square` and `sumout` are
+/// applied exactly as in [Iterating over the test data](#iterating-over-the-test-data), but in
+/// this case the test data and the train instance $`\mathbf{r}^{k},\; k=1,\ldots,n`$
+/// is substracted.
+///
+/// Then the vector $`\mathbf{u}^{k}`$ represents the contribution of the $`\mathbf{r}^{k}`$
+/// instance to every other test instance.
+///
+/// ### Sum_vectors kernel
+///
+/// The pdf result for a test instance implies the sum over all the $`\mathbf{u}^{k}`$ vectors:
+///
+/// ```math
+///     \hat{f}_{n}(\mathbf{t}^{j}) = \sum_{k=1}^{n} u_{i}^{j}
+/// ```
+///
+/// These sums are performed all at once using the sum_vectors kernel, that sums two vectors. If
+/// $`\mathbf{v} = \begin{bmatrix} v_{1} & \cdots & v_{n}\end{bmatrix}`$ and
+/// $`\mathbf{w} = \begin{bmatrix} w_{1} & \cdots & w_{n}\end{bmatrix}`$, then:
+///
+/// ```math
+///     \text{sum\_vectors}(\mathbf{v}, \mathbf{w}) = \begin{bmatrix} v_{1} + w_{1} & \cdots &
+///         v_{n} + w_{n}\end{bmatrix}
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn gaussian_kde_pdf(
+    kde: *mut GaussianKDE,
+    pro_que: *mut ProQue,
+    testing_data: *const DoubleNumpyArray,
+    result: *mut c_double,
+    error: *mut Error,
+)
+{
+    let kde = Box::from_raw(kde);
+    let mut pro_que = Box::from_raw(pro_que);
+
+    let m = *(*testing_data).shape;
+    let d = kde.d;
+
+    let max_work_size = get_max_work_size(&pro_que);
+
+    //    Iterates over training or testing data?
+    let len_iteration = if kde.n >= m { kde.n } else { m };
+
+    let local_size = if len_iteration < max_work_size {
+        len_iteration
+    } else {
+        max_work_size
+    };
+
+    let num_groups = (len_iteration as f32 / local_size as f32).ceil() as usize;
+
+    let test_slice = slice::from_raw_parts((*testing_data).ptr, m * d);
+    let (test_instances_buffer,) = copy_buffers!(pro_que, error, test_slice);
+
+    let (test_rowmajor, test_leading_dimension) = is_rowmajor(testing_data);
+
+    let (final_result_buffer, tmp_matrix_buffer, tmp_vec_buffer) =
+        empty_buffers!(pro_que, error, f64, m, len_iteration * d, len_iteration);
+
+    let kernel_substract = {
+        let (matrix_buf, vec_buf, mat_ld, vec_ld, name) = if kde.n >= m {
+            (&kde.training_data, &test_instances_buffer,
+             kde.leading_dimension, test_leading_dimension,
+            kernel_substract_name(kde.rowmajor, test_rowmajor))
+        } else {
+            (&test_instances_buffer, &kde.training_data,
+             test_leading_dimension, kde.leading_dimension,
+             kernel_substract_name(test_rowmajor, kde.rowmajor))
+        };
+
+        pro_que
+            .kernel_builder(name)
+            .global_work_size((len_iteration, d))
+            .arg(matrix_buf)
+            .arg(vec_buf)
+            .arg(&tmp_matrix_buffer)
+            .arg_named("row", &0u32)
+            .arg(mat_ld as u32)
+            .arg(vec_ld as u32)
+            .build()
+            .expect("Kernel substract build failed.")
+    };
+
+    let kernel_solve = pro_que
+        .kernel_builder("solve")
+        .global_work_size(len_iteration)
+        .arg(&tmp_matrix_buffer)
+        .arg(&kde.chol_cov)
+        .arg(d as u32)
+        .build()
+        .expect("Kernel solve build failed.");
+
+    let kernel_square = pro_que
+        .kernel_builder("square")
+        .global_work_size(len_iteration * d)
+        .arg(&tmp_matrix_buffer)
+        .build()
+        .expect("Kernel square build failed.");
+
+    let kernel_sumout = pro_que
+        .kernel_builder("sumout")
+        .global_work_size(len_iteration)
+        .arg(&tmp_matrix_buffer)
+        .arg(&tmp_vec_buffer)
+        .arg(d as u32)
+        .arg(kde.lognorm_factor)
+        .build()
+        .expect("Kernel sumout build failed.");
+
+    if kde.n >= m {
+        for i in 0..m {
+            kernel_substract.set_arg("row", i as u32).unwrap();
+            kernel_substract
+                .enq()
+                .expect("Error while executing substract kernel.");
+            kernel_solve
+                .enq()
+                .expect("Error while executing solve kernel.");
+            kernel_square
+                .enq()
+                .expect("Error while executing square kernel.");
+            kernel_sumout
+                .enq()
+                .expect("Error while executing sumout kernel.");
+            sum_gpu_vec(
+                &pro_que,
+                &tmp_vec_buffer,
+                len_iteration,
+                max_work_size,
+                local_size,
+                num_groups,
+            );
+
+            tmp_vec_buffer
+                .copy(&final_result_buffer, Some(i), Some(1))
+                .queue(pro_que.queue())
+                .enq()
+                .expect("Error copying to result buffer.");
+        }
+    } else {
+        buffer_fill_value(&pro_que, &final_result_buffer, m, 0.0f64);
+
+        for i in 0..kde.n {
+            kernel_substract.set_arg("row", i as u32).unwrap();
+            kernel_substract
+                .enq()
+                .expect("Error while executing substract kernel.");
+            kernel_solve
+                .enq()
+                .expect("Error while executing solve kernel.");
+            kernel_square
+                .enq()
+                .expect("Error while executing square kernel.");
+            kernel_sumout
+                .enq()
+                .expect("Error while executing sumout kernel.");
+
+            let kernel_sumvectors = pro_que
+                .kernel_builder("sum_vectors")
+                .global_work_size(m)
+                .arg(&final_result_buffer)
+                .arg(&tmp_vec_buffer)
+                .build()
+                .expect("Kernel sum_vectors build failed.");
+
+            kernel_sumvectors
+                .enq()
+                .expect("Error while executing sum_vectors kernel.");
+        }
+    }
+
+
+    let final_result = slice::from_raw_parts_mut(result, m);
+
+    final_result_buffer
+        .cmd()
+        .queue(pro_que.queue())
+        .read(final_result)
+        .enq()
+        .expect("Error reading result data.");
+    *error = Error::NoError;
+
+    Box::into_raw(pro_que);
+    Box::into_raw(kde);
+}
+
+
 
 /// Sums all the elements in the vector buffer `sum_buffer` and places the result in the first
 /// position of the `sum_buffer` (i.e., `sum_buffer[0]`). Keep in mind that the rest of the elements

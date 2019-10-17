@@ -13,7 +13,6 @@ ndarray = { version = "0.12" }
 num = "*"
 fnv = "1.0.3"
 ocl = "0.19"
-paste = "0.1"
 
 [build-dependencies]
 cbindgen = "0.9.1"

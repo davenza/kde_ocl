@@ -1,7 +1,7 @@
 // Row major indexing for row i column j and leading dimension for the columns
-#define RM(i, j, leading) i*leading + j
+#define RM(i, j, leading) ((i)*(leading) + (j))
 // Column major indexing for row i column j and leading dimension for the rows
-#define CM(i, j, leading) j*leading + i
+#define CM(i, j, leading) ((j)*(leading) + (i))
 
 /**
 ##########################################

@@ -164,7 +164,7 @@ pub struct GaussianKDE {
     /// ```
     lognorm_factor: f64,
     rowmajor: bool,
-    leading_dimension: usize
+    leading_dimension: usize,
 }
 
 /// Gets the maximum work group size of the default device. This is the preferred local work size
@@ -207,7 +207,6 @@ fn lognorm_factor(n: usize, d: usize, chol_cov: &Array2<f64>) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn new_proque() -> *mut ProQue {
     // TODO: The OpenCL code should be included in the code to make easier distribute the library.
-
 
     let pro_que = ProQue::builder()
         .src(open_cl_code::OPEN_CL_CODE)
@@ -256,7 +255,7 @@ pub unsafe extern "C" fn gaussian_kde_init(
         chol_cov: chol_buffer,
         lognorm_factor,
         rowmajor,
-        leading_dimension
+        leading_dimension,
     });
 
     let ptr_kde = Box::into_raw(kde);
@@ -289,12 +288,12 @@ pub extern "C" fn gaussian_proque_free(pro_que: *mut ProQue) {
     }
 }
 
+/// Checks if `x` is stored as a rowmajor array in memory. It also returns the dimension of the
+/// leading axis: columns if rowmajor, rows if column major.
 unsafe fn is_rowmajor(x: *const DoubleNumpyArray) -> (bool, usize) {
     let row_stride = *(*x).strides;
     let column_stride = *(*x).strides.offset(1);
 
-    println!("\tRow stride = {}", row_stride);
-    println!("\tColumn stride = {}", column_stride);
     if row_stride > column_stride {
         (true, *(*x).shape.offset(1))
     } else {
@@ -302,6 +301,8 @@ unsafe fn is_rowmajor(x: *const DoubleNumpyArray) -> (bool, usize) {
     }
 }
 
+/// Returns the name of the kernel `substract` depending on whether the train/test datasets are
+/// stored in rowmajor or columnmajor.
 fn kernel_substract_name(train_rowmajor: bool, test_rowmajor: bool) -> &'static str {
     if train_rowmajor {
         if test_rowmajor {
@@ -477,10 +478,9 @@ pub unsafe extern "C" fn gaussian_kde_pdf(
     testing_data: *const DoubleNumpyArray,
     result: *mut c_double,
     error: *mut Error,
-)
-{
+) {
     let kde = Box::from_raw(kde);
-    let mut pro_que = Box::from_raw(pro_que);
+    let pro_que = Box::from_raw(pro_que);
 
     let m = *(*testing_data).shape;
     let d = kde.d;
@@ -508,19 +508,28 @@ pub unsafe extern "C" fn gaussian_kde_pdf(
 
     let kernel_substract = {
         let (matrix_buf, vec_buf, mat_ld, vec_ld, name) = if kde.n >= m {
-            (&kde.training_data, &test_instances_buffer,
-             kde.leading_dimension, test_leading_dimension,
-            kernel_substract_name(kde.rowmajor, test_rowmajor))
+            (
+                &kde.training_data,
+                &test_instances_buffer,
+                kde.leading_dimension,
+                test_leading_dimension,
+                kernel_substract_name(kde.rowmajor, test_rowmajor),
+            )
         } else {
-            (&test_instances_buffer, &kde.training_data,
-             test_leading_dimension, kde.leading_dimension,
-             kernel_substract_name(test_rowmajor, kde.rowmajor))
+            (
+                &test_instances_buffer,
+                &kde.training_data,
+                test_leading_dimension,
+                kde.leading_dimension,
+                kernel_substract_name(test_rowmajor, kde.rowmajor),
+            )
         };
 
         pro_que
             .kernel_builder(name)
-            .global_work_size((len_iteration, d))
+            .global_work_size(len_iteration * d)
             .arg(matrix_buf)
+            .arg(d as u32)
             .arg(vec_buf)
             .arg(&tmp_matrix_buffer)
             .arg_named("row", &0u32)
@@ -618,7 +627,6 @@ pub unsafe extern "C" fn gaussian_kde_pdf(
         }
     }
 
-
     let final_result = slice::from_raw_parts_mut(result, m);
 
     final_result_buffer
@@ -632,8 +640,6 @@ pub unsafe extern "C" fn gaussian_kde_pdf(
     Box::into_raw(pro_que);
     Box::into_raw(kde);
 }
-
-
 
 /// Sums all the elements in the vector buffer `sum_buffer` and places the result in the first
 /// position of the `sum_buffer` (i.e., `sum_buffer[0]`). Keep in mind that the rest of the elements
@@ -822,8 +828,6 @@ pub unsafe extern "C" fn gaussian_kde_logpdf(
     Box::into_raw(pro_que);
 }
 
-
-
 unsafe fn logpdf_iterate_test(
     kde: &mut Box<GaussianKDE>,
     pro_que: &mut Box<ProQue>,
@@ -833,11 +837,9 @@ unsafe fn logpdf_iterate_test(
 ) {
     let m = *(*x).shape;
     let d = kde.d;
-    let final_result = slice::from_raw_parts_mut(result, m);
-    let max_work_size = get_max_work_size(&pro_que);
-
     let n = kde.n;
-    pro_que.set_dims(n * d);
+
+    let max_work_size = get_max_work_size(&pro_que);
 
     let local_work_size = if n < max_work_size { n } else { max_work_size };
     let num_groups = (n as f32 / local_work_size as f32).ceil() as usize;
@@ -849,13 +851,20 @@ unsafe fn logpdf_iterate_test(
     let (max_buffer, final_result_buffer, tmp_matrix_buffer, tmp_vec_buffer) =
         empty_buffers!(pro_que, error, f64, num_groups, m, n * d, n);
 
+    let (test_rowmajor, test_leading_dimension) = is_rowmajor(x);
+
+    let substract_name = kernel_substract_name(kde.rowmajor, test_rowmajor);
+
     let kernel_substract = pro_que
-        .kernel_builder("substract")
+        .kernel_builder(substract_name)
+        .global_work_size(n * d)
         .arg(&kde.training_data)
+        .arg(d as u32)
         .arg(&test_instances_buffer)
         .arg(&tmp_matrix_buffer)
         .arg_named("row", &0u32)
-        .arg(d as u32)
+        .arg(kde.leading_dimension as u32)
+        .arg(test_leading_dimension as u32)
         .build()
         .expect("Kernel substract build failed.");
 
@@ -870,6 +879,7 @@ unsafe fn logpdf_iterate_test(
 
     let kernel_square = pro_que
         .kernel_builder("square")
+        .global_work_size(n * d)
         .arg(&tmp_matrix_buffer)
         .build()
         .expect("Kernel square build failed.");
@@ -883,6 +893,16 @@ unsafe fn logpdf_iterate_test(
         .arg(kde.lognorm_factor)
         .build()
         .expect("Kernel logsumout build failed.");
+
+    let kernel_log_sum_gpu = pro_que
+        .kernel_builder("copy_logpdf_result")
+        .global_work_size(1)
+        .arg(&tmp_vec_buffer)
+        .arg(&max_buffer)
+        .arg(&final_result_buffer)
+        .arg_named("offset", &0u32)
+        .build()
+        .expect("Kernel copy_logpdf_result build failed.");
 
     for i in 0..m {
         kernel_substract.set_arg("row", i as u32).unwrap();
@@ -919,20 +939,15 @@ unsafe fn logpdf_iterate_test(
             num_groups,
         );
 
-        let kernel_log_sum_gpu = pro_que
-            .kernel_builder("copy_logpdf_result")
-            .global_work_size(1)
-            .arg(&tmp_vec_buffer)
-            .arg(&max_buffer)
-            .arg(&final_result_buffer)
-            .arg(i as u32)
-            .build()
-            .expect("Kernel copy_logpdf_result build failed.");
+        kernel_log_sum_gpu.set_arg("offset", i as u32).unwrap();
 
         kernel_log_sum_gpu
             .enq()
             .expect("Error while executing copy_logpdf_result kernel.");
     }
+
+    let final_result = slice::from_raw_parts_mut(result, m);
+
     final_result_buffer
         .cmd()
         .queue(pro_que.queue())
@@ -1153,11 +1168,7 @@ unsafe fn logpdf_iterate_train_low_memory(
 ) {
     let m = *(*x).shape;
     let d = kde.d;
-
-    let final_result = slice::from_raw_parts_mut(result, m);
-
     let n = kde.n;
-    pro_que.set_dims(m * d);
 
     let test_slice = slice::from_raw_parts((*x).ptr, m * d);
 
@@ -1169,13 +1180,20 @@ unsafe fn logpdf_iterate_train_low_memory(
     buffer_fill_value(&pro_que, &max_buffer, m, f64::MIN);
     buffer_fill_value(&pro_que, &final_result_buffer, m, 0.0f64);
 
+    let (test_rowmajor, test_leading_dimension) = is_rowmajor(x);
+
+    let substract_name = kernel_substract_name(test_rowmajor, kde.rowmajor);
+
     let kernel_substract = pro_que
-        .kernel_builder("substract")
+        .kernel_builder(substract_name)
+        .global_work_size(m * d)
         .arg(&test_instances_buffer)
+        .arg(d as u32)
         .arg(&kde.training_data)
         .arg(&tmp_matrix_buffer)
         .arg_named("row", &0u32)
-        .arg(d as u32)
+        .arg(test_leading_dimension as u32)
+        .arg(kde.leading_dimension as u32)
         .build()
         .expect("Kernel substract build failed.");
 
@@ -1190,6 +1208,7 @@ unsafe fn logpdf_iterate_train_low_memory(
 
     let kernel_square = pro_que
         .kernel_builder("square")
+        .global_work_size(m * d)
         .arg(&tmp_matrix_buffer)
         .build()
         .expect("Kernel square build failed.");
@@ -1268,9 +1287,13 @@ unsafe fn logpdf_iterate_train_low_memory(
             .enq()
             .expect("Error while executing exp_and_sum kernel.");
     }
+
     kernel_log_and_sum
         .enq()
         .expect("Error while executing log_and_sum kernel.");
+
+    let final_result = slice::from_raw_parts_mut(result, m);
+
     final_result_buffer
         .cmd()
         .queue(pro_que.queue())
@@ -1307,13 +1330,20 @@ unsafe fn logpdf_iterate_train_high_memory(
     let (max_buffer, final_result_buffer, tmp_matrix_buffer) =
         empty_buffers!(pro_que, error, f64, m * num_groups, m, m * d);
 
+    let (test_rowmajor, test_leading_dimension) = is_rowmajor(x);
+
+    let substract_name = kernel_substract_name(test_rowmajor, kde.rowmajor);
+
     let kernel_substract = pro_que
-        .kernel_builder("substract")
+        .kernel_builder(substract_name)
+        .global_work_size(m * d)
         .arg(&test_instances_buffer)
+        .arg(d as u32)
         .arg(&kde.training_data)
         .arg(&tmp_matrix_buffer)
         .arg_named("row", &0u32)
-        .arg(d as u32)
+        .arg(test_leading_dimension as u32)
+        .arg(kde.leading_dimension as u32)
         .build()
         .expect("Kernel substract build failed.");
 
@@ -1328,6 +1358,7 @@ unsafe fn logpdf_iterate_train_high_memory(
 
     let kernel_square = pro_que
         .kernel_builder("square")
+        .global_work_size(m * d)
         .arg(&tmp_matrix_buffer)
         .build()
         .expect("Kernel square build failed.");

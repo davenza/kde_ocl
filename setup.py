@@ -80,9 +80,8 @@ class CleanCommand(distutils.cmd.Command):
         pass
 
     def run(self):
-
         files_to_delete = ["kde_ocl/_ffi.py", "kde_ocl/_ffi__ffi.py", "kde_ocl/_ffi__lib.so", "kde_ocl/_ffi__lib.pyd",
-                           "rust/src/open_cl_code.rs"]
+                           "rust/src/open_cl_code.rs", "rust/src/kde_gaussian.cl"]
 
         for file in files_to_delete:
             if os.path.exists(file):

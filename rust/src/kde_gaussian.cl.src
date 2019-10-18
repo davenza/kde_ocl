@@ -1,6 +1,7 @@
+// Row major indexing for row i column j and leading dimension for the columns
 #define RM(i, j, leading) i*leading + j
+// Column major indexing for row i column j and leading dimension for the rows
 #define CM(i, j, leading) j*leading + i
-
 
 /**
 ##########################################
@@ -32,6 +33,8 @@ __kernel void sum_vectors(__global double *left, __constant double *right) {
 /**begin repeat
  * #train_mode = rowmajor, columnmajor#
  * #train_indexer = RM, CM#
+ * #find_column = %, /#
+ * #find_row = /, %#
  */
 
 /**begin repeat1
@@ -40,15 +43,18 @@ __kernel void sum_vectors(__global double *left, __constant double *right) {
  */
 
 __kernel void substract_@train_mode@_@test_mode@(__constant double *train_data,
-                        __constant double *vec,
-                        __global double *res,
-                        __private uint row,
-                        __private uint train_leading_dimension,
-                        __private uint test_leading_dimension) {
-    int r = get_global_id(0);
-    int c = get_global_id(1);
-    int mat_index = @train_indexer@(r, c, train_leading_dimension);
-    res[RM(r, c, get_global_size(1))] = train_data[mat_index] - vec[@test_indexer@(row, c, test_leading_dimension)];
+        __private uint train_cols,
+        __constant double *vec,
+        __global double *res,
+        __private uint row,
+        __private uint train_leading_dimension,
+        __private uint test_leading_dimension) {
+    int i = get_global_id(0);
+
+    int r = i @find_row@ train_leading_dimension;
+    int c = i @find_column@ train_leading_dimension;
+
+    res[RM(r, c, train_cols)] = train_data[i] - vec[@test_indexer@(row, c, test_leading_dimension)];
 }
 
 /**end repeat1**/
@@ -69,7 +75,8 @@ __kernel void solve(__global double *diff_data, __constant double *chol, __priva
 
 __kernel void square(__global double *solve_data) {
     uint idx = get_global_id(0);
-    solve_data[idx] = solve_data[idx] * solve_data[idx];
+    double d = solve_data[idx];
+    solve_data[idx] = d * d;
 }
 
 /**

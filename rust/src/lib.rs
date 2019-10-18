@@ -828,6 +828,7 @@ pub unsafe extern "C" fn gaussian_kde_logpdf(
     Box::into_raw(pro_que);
 }
 
+/// We iterate over the test points if there are more training points.
 unsafe fn logpdf_iterate_test(
     kde: &mut Box<GaussianKDE>,
     pro_que: &mut Box<ProQue>,
@@ -1252,6 +1253,7 @@ unsafe fn logpdf_iterate_train_low_memory(
         .expect("Kernel log_and_sum build failed.");
 
     // Writes the max loglikelihoods in the max_buffer
+    // TODO: Find max with euclidian distance is probably faster.
     for i in 0..n {
         kernel_substract.set_arg("row", i as u32).unwrap();
         kernel_substract

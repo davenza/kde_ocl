@@ -48,7 +48,6 @@ def expand_sources(target_dir):
         with open(base, 'w') as fid:
             fid.write(outstr)
 
-
 def build_native(spec):
     check_rust_bitness()
 

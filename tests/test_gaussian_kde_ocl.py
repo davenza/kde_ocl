@@ -9,7 +9,6 @@ from kde_ocl import gaussian_kde_ocl
 @pytest.mark.parametrize("rowmajor_test", [True, False])
 def test_pdf_1d(n_train, n_test, rowmajor_train, rowmajor_test):
     np.random.seed(0)
-
     train = np.random.normal(0, 1.8, n_train)
     if not rowmajor_train:
         train = np.asfortranarray(train)
